@@ -1,0 +1,11 @@
+#accessOptionsContainer{
+  width: 80%;
+  background-color: #f4f7f5;
+  max-height: 80%;
+  margin: auto;
+  margin-top: 20px;
+}
+
+#welcome{
+  color: #32846c;
+}
