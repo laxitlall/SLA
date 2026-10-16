@@ -81,6 +81,31 @@ def session_cmd(
     console.print(f"[green]Done.[/green] {uploader.frame_count} frames → {uploader.gcs_base}")
 
 
+<<<<<<< HEAD
+=======
+@app.command("detect")
+def detect_cmd(
+    source: str = typer.Option("0", "--source", "-s", help="Device index or stream URL."),
+    method: str = typer.Option(
+        "haar-face",
+        "--method",
+        "-m",
+        help="haar-face | hog-person | motion",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Local OpenCV detection preview (q to quit). Does not upload or change capture/serve."""
+    _setup_logging(verbose)
+    from camera_cloud_capture.detect_loop import run_detection_preview
+    from camera_cloud_capture.detection import build_detector
+
+    detector = build_detector(method)
+    console.print(f"Preview with [cyan]{detector.name}[/cyan]. Press q in the window to stop.")
+    frames = run_detection_preview(CameraSource(source), detector)
+    console.print(f"[green]Done.[/green] Processed {frames} frame(s).")
+
+
+>>>>>>> 782382c (Updated opt-in CLI preview)
 @app.command("serve")
 def serve_cmd(
     host: str = typer.Option(None, help="Bind host (defaults to API_HOST)."),
