@@ -34,9 +34,9 @@ export default function Home() {
                   <span className="text-xs font-bold text-grayfont">OR</span>
                   <span className="h-px flex-1 bg-grayfont" />
                  </div>
-                 <button className='rounded-[10px] px-6 py-5 text-[#36594f] bg-[#eef3f0]'>
+                 <Link to="/room" className='rounded-[10px] px-6 py-5 text-[#36594f] bg-[#eef3f0]'>
                   <div className='text-xl font-medium'>Continue as guest</div>
-                 </button>
+                 </Link>
               </div>
             </div>
           </section>
