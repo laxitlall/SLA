@@ -1,7 +1,11 @@
 
-#environment files
+# Environment files
 .env
 .env*
 *.env
 
+# Build files
 
+*.pyc
+
+mongoConfig.py
