@@ -187,36 +187,76 @@ def _yolo(weights: str):
     return YOLO(weights)
 
 
+def _seat_map_from_frame(frame: np.ndarray, model: Any, conf: float = .25) -> dict:
+    """Make a ONE-TIME chair-based map; review it before long-term occupancy use.
+
+    `box` is the expanded person-association region; `chair_box` is what YOLO saw.
+    The latter is what we report as the physical seat coordinates.
+    """
+    height, width = frame.shape[:2]
+    pred = model.predict(frame, conf=conf, verbose=False)[0]
+    chairs = []
+    for box in pred.boxes:
+        class_id = int(box.cls[0])
+        if str(model.names[class_id]).lower() != "chair":
+            continue
+        x1, y1, x2, y2 = (int(v) for v in box.xyxy[0].tolist())
+        if x2 <= x1 or y2 <= y1:
+            continue
+        chairs.append(([x1, y1, x2, y2], float(box.conf[0])))
+
+    # Stable order within this calibration image, independent of YOLO result order.
+    # IDs are not automatically recoverable from a different camera angle.
+    row_size = max(20, round(height * .16))
+    chairs.sort(key=lambda item: (round((item[0][1] + item[0][3]) / (2 * row_size)),
+                                  (item[0][0] + item[0][2]) / 2))
+    seats = []
+    for index, (chair_box, confidence) in enumerate(chairs, 1):
+        x1, y1, x2, y2 = chair_box
+        cw, ch = x2 - x1, y2 - y1
+        # Include space above a chair where a seated person's torso appears.
+        # This is an initial guess; adjust `box` in seats.json if necessary.
+        region = [max(0, round(x1 - .20 * cw)), max(0, round(y1 - .85 * ch)),
+                  min(width, round(x2 + .20 * cw)), min(height, round(y2 + .10 * ch))]
+        seats.append({"seat_id": f"S{index:02d}", "box": region,
+                      "chair_box": chair_box, "chair_confidence": round(confidence, 4)})
+    return {"reference_width": width, "reference_height": height, "seats": seats,
+            "note": "Proposed seat map from visible chairs. Review missed/hidden seats and regions."}
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    """Prevent readers from seeing a partially written latest.json file."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def detect_chairs(image_path: str, output_dir: str = "outputs", weights: str = "yolo11n.pt",
                   conf: float = .25, display: bool = False) -> dict[str, Any]:
-    """Original YOLO-chair prototype, enhanced to write machine-readable JSON.
-
-    Warning: detects visible chairs, not actual occupied/available study seats.
-    """
+    """Detect visible chairs, retaining old outputs and ALSO creating seats.json."""
     frame = cv2.imread(image_path)
     if frame is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
     model = _yolo(weights)
-    pred = model.predict(frame, conf=conf, verbose=False)[0]
-    found = []
-    boxes = []
-    for box in pred.boxes:
-        cls = int(box.cls[0])
-        if str(model.names[cls]).lower() != "chair":
-            continue
-        seat_id = f"S{len(found)+1:02d}"
-        x1, y1, x2, y2 = (int(x) for x in box.xyxy[0].tolist())
-        score = float(box.conf[0])
-        found.append({"seat_id": seat_id, "box": [x1, y1, x2, y2], "confidence": score})
-        boxes.append(BoundingBox(x1, y1, x2-x1, y2-y1, seat_id, score))
-    path = Path(output_dir)
-    path.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(path / "detected_seats.jpg"), draw_boxes(frame, boxes))
-    result = {"source": image_path, "detected_chairs": len(found), "chairs": found,
+    seat_map = _seat_map_from_frame(frame, model, conf)
+    detected = []
+    annotations = []
+    for seat in seat_map["seats"]:
+        seat_id, chair = seat["seat_id"], seat["chair_box"]
+        x1, y1, x2, y2 = chair
+        score = seat["chair_confidence"]
+        detected.append({"seat_id": seat_id, "box": chair, "confidence": score})
+        annotations.append(BoundingBox(x1, y1, x2 - x1, y2 - y1, seat_id, score))
+    dest = Path(output_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    preview = draw_boxes(frame, annotations)
+    cv2.imwrite(str(dest / "detected_seats.jpg"), preview)
+    result = {"source": image_path, "detected_chairs": len(detected), "chairs": detected,
               "note": "Visible-chair count only; not occupancy or permanent seat capacity."}
-    (path / "detected_chairs.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    _atomic_json(dest / "detected_chairs.json", result)
+    _atomic_json(dest / "seats.json", seat_map)
     if display:
-        cv2.imshow("Automatic Chair Detection", draw_boxes(frame, boxes))
+        cv2.imshow("Automatic Chair Detection", preview)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
     return result
@@ -249,7 +289,18 @@ def load_seats(filename: str) -> tuple[list[dict], tuple[int, int] | None]:
         x1, y1, x2, y2 = map(int, values)
         if min(x1, y1) < 0 or x2 <= x1 or y2 <= y1:
             raise ValueError(f"{seat_id}: invalid box coordinates {values}")
-        regions.append({"seat_id": seat_id, "box": [x1, y1, x2, y2]})
+        chair = item.get("chair_box", [x1, y1, x2, y2])
+        if not isinstance(chair, list) or len(chair) != 4:
+            raise ValueError(f"{seat_id}: invalid chair_box")
+        chair = list(map(int, chair))
+        if min(chair[:2]) < 0 or chair[2] <= chair[0] or chair[3] <= chair[1]:
+            raise ValueError(f"{seat_id}: invalid chair_box coordinates")
+        chair_conf = item.get("chair_confidence")
+        if chair_conf is not None and not 0 <= float(chair_conf) <= 1:
+            raise ValueError(f"{seat_id}: chair_confidence must be in [0, 1]")
+        regions.append({"seat_id": seat_id, "box": [x1, y1, x2, y2],
+                        "chair_box": chair,
+                        "chair_confidence": float(chair_conf) if chair_conf is not None else None})
     if not regions:
         raise ValueError("No seats configured")
     w = meta.get("reference_width") or meta.get("image_width")
@@ -263,11 +314,14 @@ def _intersection(a: list[int], b: list[int]) -> int:
 
 
 def match_people_to_seats(seats: list[dict], people: list[dict], threshold: float = .30) -> list[dict]:
-    """Greedy unique person-seat matching; frame-by-frame heuristic, not tracking.
+    """Greedy unique person-seat matching; heuristic, NOT calibrated occupancy odds.
 
-    Uses torso/body anchor or overlap fraction of seat's calibration region.
+    Unmatched regions next to a person are 'unknown' rather than falsely 'available'.
+    The confidence of an occupied seat is the detector's PERSON confidence.
+    An empty seat gets confidence=None, since absence is not positive evidence.
     """
     candidates = []
+    possibly_occluded = set()
     for si, seat in enumerate(seats):
         box = seat["box"]
         seat_area = max(1, (box[2]-box[0])*(box[3]-box[1]))
@@ -276,11 +330,13 @@ def match_people_to_seats(seats: list[dict], people: list[dict], threshold: floa
             anchor = ((p[0]+p[2])/2, p[1] + .65*(p[3]-p[1]))
             inside = box[0] <= anchor[0] <= box[2] and box[1] <= anchor[1] <= box[3]
             overlap = _intersection(box, p)/seat_area
+            if overlap >= .08:
+                possibly_occluded.add(si)
             if inside or overlap >= threshold:
                 candidates.append((int(inside), overlap, person["confidence"], si, pi))
     used_seats, used_people = set(), set()
     statuses = {seat["seat_id"]: {"seat_id": seat["seat_id"], "status": "available",
-                                   "confidence": None} for seat in seats}
+                                    "confidence": None} for seat in seats}
     for inside, overlap, confidence, si, pi in sorted(candidates, reverse=True):
         if si in used_seats or pi in used_people:
             continue
@@ -288,21 +344,42 @@ def match_people_to_seats(seats: list[dict], people: list[dict], threshold: floa
         used_people.add(pi)
         statuses[seats[si]["seat_id"]] = {"seat_id": seats[si]["seat_id"],
                                           "status": "occupied", "confidence": float(confidence)}
+    for si in possibly_occluded - used_seats:
+        statuses[seats[si]["seat_id"]]["status"] = "unknown"
     return list(statuses.values())
 
 
-def analyze_occupancy(source: str, seats_path: str, *, output_dir: str = "outputs",
+def _hold_occupied(statuses: list[dict], last: dict[str, str], miss: dict[str, int],
+                   hold_frames: int) -> None:
+    """Keep a recent occupied report during a short detection miss in video."""
+    for row in statuses:
+        key, observed = row["seat_id"], row["status"]
+        if observed == "occupied":
+            miss[key] = 0
+        elif hold_frames > 0 and last.get(key) == "occupied":
+            miss[key] = miss.get(key, 0) + 1
+            if miss[key] <= hold_frames:
+                row.update(status="occupied", confidence=None, stabilized=True)
+        else:
+            miss[key] = 0
+        last[key] = row["status"]
+
+
+def analyze_occupancy(source: str, seats_path: str | None, *, output_dir: str = "outputs",
                       weights: str = "yolo11n.pt", conf: float = .25, every: int = 1,
                       max_frames: int = 0, room_id: str = "room-1", camera_id: str = "camera-1",
-                      api_url: str | None = None, api_key: str | None = None) -> dict[str, Any]:
-    """Detect people, reuse fixed seat regions and emit occupancy JSON/preview.
+                      api_url: str | None = None, api_key: str | None = None,
+                      auto_map: bool = False, hold_frames: int = 2) -> dict[str, Any]:
+    """Fixed or auto-generated seat regions + person detector -> occupancy JSON.
 
-    api_url is optional full URL to POST /api/occupancy. 'available' means
-    no person matched this frame, and is an estimate rather than certainty.
+    For reliable stable IDs use a reviewed seat map and fixed camera view.
+    Auto-map detects VISIBLE chairs in the first analyzed frame, only once.
     """
-    if every < 1 or max_frames < 0 or not 0 <= conf <= 1:
-        raise ValueError("every must be >= 1, max_frames >= 0, confidence in [0,1]")
-    seats, ref_size = load_seats(seats_path)
+    if every < 1 or max_frames < 0 or not 0 <= conf <= 1 or hold_frames < 0:
+        raise ValueError("every >= 1, max_frames >= 0, confidence in [0,1], hold_frames >= 0")
+    if bool(seats_path) == bool(auto_map):
+        raise ValueError("Provide either --seats PATH or --auto-map, not both/neither")
+    seats, ref_size = load_seats(seats_path) if seats_path else (None, None)
     model = _yolo(weights)
     dest = Path(output_dir)
     dest.mkdir(parents=True, exist_ok=True)
@@ -325,39 +402,69 @@ def analyze_occupancy(source: str, seats_path: str, *, output_dir: str = "output
 
     previous = None
     count = 0
+    last_status: dict[str, str] = {}
+    misses: dict[str, int] = {}
     try:
         history_path = dest / "frames.jsonl"
         with history_path.open("w", encoding="utf-8") as history:
             for frame_index, frame in enumerate(frame_iter):
                 if frame_index % every:
                     continue
-                h, w = frame.shape[:2]
-                scaled = [dict(seat, box=([round(seat["box"][j] * (w/ref_size[0] if j%2==0 else h/ref_size[1]))
-                                                 for j in range(4)] if ref_size else seat["box"])) for seat in seats]
+                height, width = frame.shape[:2]
+                if seats is None:
+                    generated = _seat_map_from_frame(frame, model, conf)
+                    if not generated["seats"]:
+                        raise RuntimeError("No visible chairs detected for auto-map. Try a clear/empty-room "
+                                           "image or manually provide seats.json")
+                    generated["room_id"] = room_id
+                    generated["camera_id"] = camera_id
+                    _atomic_json(dest / "seats.json", generated)
+                    seats, ref_size = load_seats(str(dest / "seats.json"))
+                    logger.warning("Auto-map proposes %d visible chairs; review seats.json for missed seats",
+                                   len(seats))
+                scale_x = width / ref_size[0] if ref_size else 1
+                scale_y = height / ref_size[1] if ref_size else 1
+                scaled = []
+                for seat in seats:
+                    scaled.append(dict(seat, **{
+                        name: [round(v * (scale_x if i % 2 == 0 else scale_y))
+                               for i, v in enumerate(seat[name])]
+                        for name in ("box", "chair_box")
+                    }))
                 pred = model.predict(frame, conf=conf, classes=[0], verbose=False)[0]
                 persons = []
                 for item in pred.boxes:
                     x1, y1, x2, y2 = (int(v) for v in item.xyxy[0].tolist())
                     persons.append({"box": [x1, y1, x2, y2], "confidence": float(item.conf[0])})
                 statuses = match_people_to_seats(scaled, persons)
-                occupied = sum(s["status"] == "occupied" for s in statuses)
+                if not is_image and hold_frames:
+                    _hold_occupied(statuses, last_status, misses, hold_frames)
+                for seat, status in zip(scaled, statuses):
+                    x1, y1, x2, y2 = seat["chair_box"]
+                    status["coordinates"] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                    status["occupancy"] = status["status"]
+                    status["chair_confidence"] = seat["chair_confidence"]
+                counts = {name: sum(s["status"] == name for s in statuses)
+                          for name in ("occupied", "available", "unknown")}
                 previous = {
                     "room_id": room_id, "camera_id": camera_id,
                     "observed_at": datetime.now(timezone.utc).isoformat(),
                     "frame_index": frame_index,
-                    "counts": {"total": len(statuses), "occupied": occupied,
-                               "available": len(statuses)-occupied, "unknown": 0},
+                    "counts": {"total": len(statuses), **counts},
                     "seats": statuses,
                 }
-                (dest / "latest.json").write_text(json.dumps(previous, indent=2), encoding="utf-8")
+                _atomic_json(dest / "latest.json", previous)
                 history.write(json.dumps(previous) + "\n")
                 history.flush()
                 overlay = frame.copy()
                 for seat, status in zip(scaled, statuses):
-                    x1, y1, x2, y2 = seat["box"]
-                    color = (0, 175, 0) if status["status"] == "available" else (20, 20, 230)
+                    x1, y1, x2, y2 = seat["chair_box"]
+                    state = status["status"]
+                    color = {"available": (0, 175, 0), "occupied": (20, 20, 230),
+                             "unknown": (0, 200, 230)}[state]
                     cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(overlay, f'{status["seat_id"]}: {status["status"]}',
+                    held = "*" if status.get("stabilized") else ""
+                    cv2.putText(overlay, f'{status["seat_id"]}: {state}{held}',
                                 (x1, max(18, y1-5)), cv2.FONT_HERSHEY_SIMPLEX, .55, color, 2)
                 cv2.imwrite(str(dest / "preview.jpg"), overlay)
                 if api_url:
@@ -374,7 +481,8 @@ def analyze_occupancy(source: str, seats_path: str, *, output_dir: str = "output
                     except Exception:
                         logger.exception("Could not send occupancy to API %s", api_url)
                 count += 1
-                print(f"Frame {frame_index}: {occupied}/{len(statuses)} occupied")
+                print(f"Frame {frame_index}: {counts['occupied']}/{len(statuses)} occupied, "
+                      f"{counts['unknown']} unknown")
                 if max_frames and count >= max_frames:
                     break
     finally:
