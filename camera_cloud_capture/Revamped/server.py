@@ -104,6 +104,23 @@ class SeatStatus(BaseModel):
     seat_id: str = Field(min_length=1)
     status: Literal["occupied", "available", "unknown"]
     confidence: float | None = Field(default=None, ge=0, le=1)
+    # Optional additions: older clients can still post only the three original fields.
+    occupancy: Literal["occupied", "available", "unknown"] | None = None
+    coordinates: dict[str, int] | None = None
+    chair_confidence: float | None = Field(default=None, ge=0, le=1)
+    stabilized: bool = False
+
+    @model_validator(mode="after")
+    def occupancy_matches_status(self):
+        if self.occupancy is not None and self.occupancy != self.status:
+            raise ValueError("occupancy and status must agree")
+        if self.coordinates is not None:
+            if set(self.coordinates) != {"x1", "y1", "x2", "y2"}:
+                raise ValueError("coordinates require x1, y1, x2, y2")
+            x1, y1, x2, y2 = (self.coordinates[key] for key in ("x1", "y1", "x2", "y2"))
+            if min(x1, y1) < 0 or x2 <= x1 or y2 <= y1:
+                raise ValueError("invalid seat coordinates")
+        return self
 
 
 class Counts(BaseModel):
@@ -320,24 +337,30 @@ def detect_cmd(source: str = typer.Option("0", "--source", "-s"),
 @cli.command("detect-seats")
 def detect_seats_cmd(source: str = typer.Option(..., "--source"),
                      output_dir: str = typer.Option("outputs", "--output-dir"),
-                     weights: str = "yolo11n.pt", show: bool = False):
-    """Detect visible chairs (original prototype); NOT occupancy."""
-    result = detect_chairs(source, output_dir, weights, display=show)
-    console.print(f"Visible chairs: {result['detected_chairs']} (not occupancy)")
+                     weights: str = "yolo11n.pt", conf: float = typer.Option(.25, min=0, max=1),
+                     show: bool = False):
+    """Detect chairs and save a reusable, REVIEWABLE seats.json map."""
+    result = detect_chairs(source, output_dir, weights, conf=conf, display=show)
+    console.print(f"Visible chairs: {result['detected_chairs']} (review seats.json before occupancy)")
 
 
 @cli.command("occupancy")
 def occupancy_cmd(source: str = typer.Option(..., "--source"),
-                  seats: str = typer.Option(..., "--seats"),
+                  seats: str | None = typer.Option(None, "--seats"),
                   output_dir: str = typer.Option("outputs", "--output-dir"),
-                  weights: str = "yolo11n.pt", every: int = 1,
-                  max_frames: int = 0, room_id: str = "room-1", camera_id: str = "camera-1",
+                  weights: str = "yolo11n.pt", conf: float = typer.Option(.25, min=0, max=1),
+                  every: int = 1, max_frames: int = 0,
+                  room_id: str = "room-1", camera_id: str = "camera-1",
+                  auto_map: bool = typer.Option(False, "--auto-map", help="Detect visible chairs in first frame"),
+                  hold_frames: int = typer.Option(2, "--hold-frames", min=0,
+                                                  help="Delay a missing-person state change across video frames"),
                   api_url: str | None = typer.Option(None, help="Optional full POST URL for /api/occupancy"),
                   api_key: str | None = typer.Option(None, help="API key for X-API-Key when configured")):
-    """Fixed seat regions + YOLO person detection -> occupancy JSON."""
+    """Fixed or auto-detected seat regions + YOLO people -> JSON."""
     result = analyze_occupancy(source, seats, output_dir=output_dir, weights=weights,
-                               every=every, max_frames=max_frames, room_id=room_id,
-                               camera_id=camera_id, api_url=api_url, api_key=api_key)
+                               conf=conf, every=every, max_frames=max_frames, room_id=room_id,
+                               camera_id=camera_id, api_url=api_url, api_key=api_key,
+                               auto_map=auto_map, hold_frames=hold_frames)
     console.print(f"Result: {result['counts']}  Saved to {Path(output_dir) / 'latest.json'}")
 
 
