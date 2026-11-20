@@ -1,5 +1,6 @@
 import { Link, useNavigate } from "react-router";
 import { useState } from "react";
+import { apiLogin } from "../utils/api";
 
 const IITB_ROLL_PATTERN = "^(\\d{2}[0-9A-Za-z]\\d{6}|\\d{2}[A-Za-z]\\d{4})$";
 
@@ -7,16 +8,32 @@ export default function Login() {
   const navigate = useNavigate();
   const [rollNumber, setRollNumber] = useState("");
   const [password, setPassword] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    //navigate("/room");
+    setErrorMsg("");
+    try {
+      await apiLogin(rollNumber, password);
+      navigate("/room");
+    } catch (err) {
+      setErrorMsg(err.message || "Invalid credentials");
+    }
   };
 
   return (
     <>
       <h1 className="text-4xl font-bold text-greenfont pb-5">Welcome Back!</h1>
-      <div className="text-grayfont">Use your university roll number to continue</div>
+      <div className="text-grayfont">
+        Use your university roll number to continue
+      </div>
+
+      {errorMsg && (
+        <div className="mt-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-xs font-medium text-red-700">
+          {errorMsg}
+        </div>
+      )}
+
       <form className="flex flex-col gap-4 mt-9" onSubmit={handleLogin}>
         <div className="flex flex-col gap-2">
           <label className="font-medium text-[#434343]">University Roll Number</label>
@@ -53,12 +70,17 @@ export default function Login() {
             onChange={(e) => setPassword(e.target.value)}
           />
         </div>
-        <button type="button" className="text-[#36594f] text-right font-small">
-          Forgot password?
-        </button>
+        <div className="flex justify-end items-center text-xs">
+          <button
+            type="button"
+            className="text-[#36594f] text-right font-medium"
+          >
+            Forgot password?
+          </button>
+        </div>
         <button
           type="submit"
-          className="flex justify-center bg-[#174c3f] rounded-[10px] text-whitefont px-6 py-5 shadow-[0_20px_70px_rgba(23,76,63,0.15)]"
+          className="flex justify-center bg-[#174c3f] rounded-[10px] text-whitefont px-6 py-5 shadow-[0_20px_70px_rgba(23,76,63,0.15)] cursor-pointer"
         >
           <span className="text-whitefont font-bold">Log in to StudySpot</span>
         </button>
