@@ -1,11 +1,12 @@
-import './App.css'
+import "./App.css";
 import { BrowserRouter, Routes, Route } from "react-router";
 import AuthLayout from "./components/AuthLayout";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Room from "./pages/Room";
-import PersonalRoom from "./pages/PersonalRoom";
+import Friends from "./pages/Friends";
+import Profile from "./pages/Profile";
 
 function App() {
   return (
@@ -17,10 +18,13 @@ function App() {
           <Route path="/signup" element={<Signup />} />
         </Route>
         <Route path="/room" element={<Room />} />
-        <Route path="/personal-room" element={<PersonalRoom />} />
+        <Route path="/personal-room" element={<Room />} />
+        <Route path="/friends" element={<Friends />} />
+        <Route path="/profile" element={<Profile />} />
+        <Route path="/profile/:rollNumber" element={<Profile />} />
       </Routes>
     </BrowserRouter>
   );
 }
 
-export default App
+export default App;

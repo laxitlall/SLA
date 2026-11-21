@@ -1,11 +1,12 @@
 // src/utils/getOccupancy.js
 import campusData from "../../../backend/database/campus_occupancy.json";
 
-export function getCampusOccupancySummary() {
+export function getCampusOccupancySummary(sourceData = null) {
+  const data = sourceData && sourceData.zones ? sourceData : campusData;
   let finalAvailableSeats = 0;
 
   // Process zones to calculate total vs available seats
-  const summary = campusData.zones.map((zone) => {
+  const summary = data.zones.map((zone) => {
     let totalSeats = 0;
     let availableSeats = 0;
     let spotHeldSeats = 0;
@@ -55,5 +56,5 @@ export function getCampusOccupancySummary() {
     };
   });
 
-  return { summary, finalAvailableSeats };
+  return { summary, finalAvailableSeats, timestamp: data.timestamp };
 }
