@@ -1,71 +1,177 @@
+from __future__ import annotations
 
-import cv2
-from ultralytics import YOLO
 from pathlib import Path
+from typing import Any
+import cv2
+import numpy as np
 
-# Create output folder
-Path("outputs").mkdir(exist_ok=True)
+# COCO class names in YOLOv11 that correspond to seat occupancy
+CHAIR_CLASSES = {"chair", "couch", "bench"}
+PERSON_CLASSES = {"person"}
+LAPTOP_CLASSES = {"laptop"}
+BAG_CLASSES = {"backpack", "handbag", "suitcase"}
 
-# Load pretrained object detection model
-model = YOLO("yolo11n.pt")
 
-# Load study room image
-image = cv2.imread("images/room.jpeg")
+def _boxes_overlap(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> bool:
+    """
+    Returns True if box_b overlaps significantly with box_a (or its center lies inside/near box_a).
+    """
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
 
-if image is None:
-    raise FileNotFoundError("Room image not found")
+    # Expand chair box slightly (15%) to catch laptops/people sitting right on/above the chair
+    pad_x = int((ax2 - ax1) * 0.15)
+    pad_y = int((ay2 - ay1) * 0.15)
+    eax1, eay1, eax2, eay2 = ax1 - pad_x, ay1 - pad_y, ax2 + pad_x, ay2 + pad_y
 
-# Detect objects
-results = model(image, conf=0.25)
+    inter_x1 = max(eax1, bx1)
+    inter_y1 = max(eay1, by1)
+    inter_x2 = min(eax2, bx2)
+    inter_y2 = min(eay2, by2)
 
-seat_count = 0
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return False
 
-for box in results[0].boxes:
+    inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    chair_area = max(1, (ax2 - ax1) * (ay2 - ay1))
+    obj_area = max(1, (bx2 - bx1) * (by2 - by1))
 
-    class_id = int(box.cls[0])
-    class_name = model.names[class_id]
+    return (inter_area / min(chair_area, obj_area)) >= 0.15
 
-    # Only detect chairs
-    if class_name != "chair":
-        continue
 
-    seat_count += 1
+def detect_seats_in_frame(
+    frame: np.ndarray,
+    *,
+    seat_prefix: str = "LIB-R1",
+    conf_threshold: float = 0.25,
+    save_annotated_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Runs YOLOv11 on a BGR image frame, detects chairs + people + laptops + bags,
+    and returns a list of seat state dictionaries ready for MongoDB Atlas & React frontend.
+    """
+    from ultralytics import YOLO
 
-    x1, y1, x2, y2 = map(int, box.xyxy[0])
-    confidence = float(box.conf[0])
+    model_path = Path(__file__).resolve().parent.parent / "yolo11n.pt"
+    model = YOLO(str(model_path) if model_path.exists() else "yolo11n.pt")
+    results = model(frame, conf=conf_threshold, verbose=False)
 
-    # Draw chair bounding box
-    cv2.rectangle(
-        image,
-        (x1, y1),
-        (x2, y2),
-        (0, 255, 0),
-        2
+    chairs: list[tuple[tuple[int, int, int, int], float]] = []
+    persons: list[tuple[int, int, int, int]] = []
+    laptops: list[tuple[int, int, int, int]] = []
+    bags: list[tuple[int, int, int, int]] = []
+
+    for box in results[0].boxes:
+        class_id = int(box.cls[0])
+        class_name = model.names[class_id]
+        coords = tuple(map(int, box.xyxy[0]))
+        conf = float(box.conf[0])
+
+        if class_name in CHAIR_CLASSES:
+            chairs.append((coords, conf))
+        elif class_name in PERSON_CLASSES:
+            persons.append(coords)
+        elif class_name in LAPTOP_CLASSES:
+            laptops.append(coords)
+        elif class_name in BAG_CLASSES:
+            bags.append(coords)
+
+    # Sort chairs left-to-right, top-to-bottom for deterministic seat numbering
+    chairs.sort(key=lambda item: (item[0][1] // 80, item[0][0]))
+
+    annotated = frame.copy()
+    seats: list[dict[str, Any]] = []
+
+    for idx, (chair_box, conf) in enumerate(chairs, start=1):
+        seat_id = f"{seat_prefix}-S{idx:02d}"
+        has_person = any(_boxes_overlap(chair_box, p) for p in persons)
+        has_laptop = any(_boxes_overlap(chair_box, l) for l in laptops)
+        has_bag = any(_boxes_overlap(chair_box, b) for b in bags)
+
+        if has_person:
+            state = "OCCUPIED"
+            color = (0, 0, 255)  # Red
+        elif has_laptop or has_bag:
+            state = "SPOT_HELD"
+            color = (0, 165, 255)  # Orange/Amber
+        else:
+            state = "AVAILABLE"
+            color = (0, 200, 0)  # Green
+
+        x1, y1, x2, y2 = chair_box
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(
+            annotated,
+            f"{seat_id.split('-')[-1]}:{state[:4]} ({conf:.2f})",
+            (x1, max(y1 - 8, 15)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            2,
+        )
+
+        seats.append(
+            {
+                "seat_id": seat_id,
+                "detections": {
+                    "person": has_person,
+                    "laptop": has_laptop,
+                    "bag": has_bag,
+                },
+                "computed_state": state,
+                "confidence_score": round(conf, 2),
+            }
+        )
+
+    if save_annotated_path:
+        out_path = Path(save_annotated_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out_path), annotated)
+
+    return seats
+
+
+def detect_seats_from_source(
+    *,
+    image_path: str | None = None,
+    camera_source: str | None = None,
+    seat_prefix: str = "LIB-R1",
+) -> list[dict[str, Any]]:
+    """
+    Captures a single frame from either an image file or a live camera source
+    and runs YOLO seat occupancy detection.
+    """
+    from camera_cloud_capture.camera import CameraSource
+
+    frame = None
+    if image_path and Path(image_path).exists():
+        frame = cv2.imread(image_path)
+    elif camera_source is not None:
+        cap = CameraSource(str(camera_source)).open()
+        try:
+            ok, captured = cap.read()
+            if ok:
+                frame = captured
+        finally:
+            cap.release()
+
+    if frame is None:
+        raise FileNotFoundError(
+            "Could not load frame from the specified image_path or camera_source."
+        )
+
+    output_file = Path("outputs") / "detected_seats.jpg"
+    return detect_seats_in_frame(
+        frame, seat_prefix=seat_prefix, save_annotated_path=output_file
     )
 
-    # Display seat ID
-    cv2.putText(
-        image,
-        f"S{seat_count:02d} ({confidence:.2f})",
-        (x1, max(y1 - 10, 15)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 255, 0),
-        2
-    )
 
-    print(
-        f"Seat S{seat_count:02d}: "
-        f"({x1}, {y1}, {x2}, {y2}), "
-        f"Confidence: {confidence:.2f}"
-    )
-
-# Save output image
-cv2.imwrite("outputs/detected_seats.jpg", image)
-
-print(f"\nTotal chairs detected: {seat_count}")
-
-# Display result
-cv2.imshow("Automatic Seat Detection", image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    default_img = Path("images/room.jpeg")
+    if not default_img.exists():
+        print(f"Place a room image at {default_img} or call detect_seats_from_source(camera_source='0').")
+    else:
+        detected = detect_seats_from_source(image_path=str(default_img))
+        print(f"Total seats detected: {len(detected)}")
+        for s in detected:
+            print(s)

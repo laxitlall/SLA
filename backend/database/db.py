@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / "atlas-credentials.env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "studyspot").strip()
@@ -567,6 +568,20 @@ class StudySpotDatabase:
         if self.using_cloud:
             doc = {**campus_data, "_id": "campus_live"}
             self.db.occupancy.replace_one({"_id": "campus_live"}, doc, upsert=True)
+
+    def update_room_seats(
+        self, zone_name: str, room_id: str, seats: list[dict]
+    ) -> dict:
+        campus_data = self.get_occupancy()
+        campus_data["timestamp"] = iso_z(utc_now())
+        for zone in campus_data.get("zones", []):
+            if zone["name"].lower() == zone_name.strip().lower():
+                for room in zone.get("rooms", []):
+                    if room["room_id"].lower() == room_id.strip().lower():
+                        room["seats"] = seats
+                        break
+        self.save_occupancy(campus_data)
+        return campus_data
 
 
 db_instance = StudySpotDatabase()

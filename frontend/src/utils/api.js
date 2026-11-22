@@ -1,6 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 const USER_STORAGE_KEY = "studyspot_current_user";
-const FALLBACK_STORE_KEY = "studyspot_fallback_store_v1";
+const FALLBACK_STORE_KEY = "studyspot_fallback_store_v3";
 
 export function getCurrentUser() {
   try {
@@ -24,131 +24,39 @@ export function logoutUser() {
 }
 
 function getDefaultFallbackStore() {
-  const now = Date.now();
   return {
     users: [
       {
-        roll_number: "23B1001",
+        roll_number: "26M0821",
         full_name: "Laxit Lall",
-        email: "23b1001@iitb.ac.in",
+        email: "26m0821@iitb.ac.in",
         password: "password123",
         branch: "Computer Science",
-        hostel: "Hostel 4",
-        bio: "Preparing for endsems. Usually at Central Library or H4 Study Room.",
-      },
-      {
-        roll_number: "23B1002",
-        full_name: "Aarav Sharma",
-        email: "23b1002@iitb.ac.in",
-        password: "password123",
-        branch: "Electrical Engineering",
-        hostel: "Hostel 3",
-        bio: "Signals & Systems grind. Down for late night study sessions.",
-      },
-      {
-        roll_number: "22B0945",
-        full_name: "Priya Patel",
-        email: "22b0945@iitb.ac.in",
-        password: "password123",
-        branch: "Mechanical Engineering",
-        hostel: "Hostel 10",
-        bio: "Thermodynamics & CAD. Quiet study room preferred.",
-      },
-      {
-        roll_number: "200050012",
-        full_name: "Rohan Verma",
-        email: "200050012@iitb.ac.in",
-        password: "password123",
-        branch: "Computer Science",
-        hostel: "Hostel 2",
-        bio: "Final year BTP + ML papers at Central Library Reading Hall 1.",
-      },
-      {
-        roll_number: "19D070021",
-        full_name: "Sneha Iyer",
-        email: "19d070021@iitb.ac.in",
-        password: "password123",
-        branch: "Aerospace Dual Degree",
         hostel: "Hostel 15",
-        bio: "Thesis writing at Central Library.",
+        bio: "Ghare jaake sutti babu",
       },
       {
-        roll_number: "24M0412",
-        full_name: "Kabir Nair",
-        email: "24m0412@iitb.ac.in",
+        roll_number: "26M0829",
+        full_name: "Ayush Raj",
+        email: "26m0829@iitb.ac.in",
         password: "password123",
-        branch: "Data Science & AI",
-        hostel: "Hostel 18",
-        bio: "Deep learning study group in the evenings.",
+        branch: "Computer Science",
+        hostel: "Hostel 15",
+        bio: "Ghare jaake sutti babu",
+      },
+      {
+        roll_number: "26M0828",
+        full_name: "sushil kumar",
+        email: "26m0828@iitb.ac.in",
+        password: "password123",
+        branch: "Computer Science",
+        hostel: "Hostel 10",
+        bio: "Ghare jaake sutti babu",
       },
     ],
-    friendships: [
-      { sender_roll: "23B1001", receiver_roll: "23B1002", status: "ACCEPTED" },
-      { sender_roll: "23B1001", receiver_roll: "22B0945", status: "ACCEPTED" },
-      { sender_roll: "200050012", receiver_roll: "23B1001", status: "ACCEPTED" },
-      { sender_roll: "19D070021", receiver_roll: "23B1001", status: "PENDING" },
-    ],
-    active_hands: [
-      {
-        user_roll: "23B1002",
-        zone_name: "Central Library",
-        room_id: "central-lib-room-1",
-        room_name: "Reading Hall 1",
-        note: "Signals & Systems problem set",
-        raised_at: new Date(now - 35 * 60000).toISOString(),
-        expires_at: new Date(now + 85 * 60000).toISOString(),
-      },
-      {
-        user_roll: "22B0945",
-        zone_name: "Hostel 10",
-        room_id: "h10-room-1",
-        room_name: "Study Room 1",
-        note: "Thermodynamics revision",
-        raised_at: new Date(now - 50 * 60000).toISOString(),
-        expires_at: new Date(now + 70 * 60000).toISOString(),
-      },
-      {
-        user_roll: "200050012",
-        zone_name: "Central Library",
-        room_id: "central-lib-room-3",
-        room_name: "Reading Hall 3",
-        note: "Reading ML papers",
-        raised_at: new Date(now - 20 * 60000).toISOString(),
-        expires_at: new Date(now + 100 * 60000).toISOString(),
-      },
-    ],
-    rsvps: [
-      {
-        rsvp_id: "rsvp-1",
-        creator_roll: "23B1002",
-        creator_name: "Aarav Sharma",
-        zone_name: "Central Library",
-        room_id: "central-lib-room-2",
-        room_name: "Reading Hall 2",
-        start_time: "Today, 8:00 PM",
-        end_time: "Today, 11:00 PM",
-        topic: "DSA & LeetCode Group Grind",
-        participants: [
-          { roll_number: "23B1002", full_name: "Aarav Sharma" },
-          { roll_number: "23B1001", full_name: "Laxit Lall" },
-        ],
-      },
-      {
-        rsvp_id: "rsvp-2",
-        creator_roll: "22B0945",
-        creator_name: "Priya Patel",
-        zone_name: "Hostel 4",
-        room_id: "h4-room-1",
-        room_name: "Study Room 1",
-        start_time: "Today, 9:30 PM",
-        end_time: "Today, 11:30 PM",
-        topic: "Quiet Endsem Prep",
-        participants: [
-          { roll_number: "22B0945", full_name: "Priya Patel" },
-          { roll_number: "200050012", full_name: "Rohan Verma" },
-        ],
-      },
-    ],
+    friendships: [],
+    active_hands: [],
+    rsvps: [],
   };
 }
 

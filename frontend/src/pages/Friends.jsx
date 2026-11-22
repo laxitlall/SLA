@@ -137,8 +137,8 @@ export default function Friends() {
             Find College Mates
           </h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Search by old/new IITB Roll Number (e.g. 23B1002, 200050012,
-            19D070021) or Name (e.g. Aarav, Sneha, Kabir)
+            Search by old/new IITB Roll Number (e.g. 26M0821, 26M0829,
+            26M0828) or Name (e.g. Laxit, Ayush, Sushil)
           </p>
 
           <div className="mt-4 flex items-center bg-roomgreen rounded-xl px-4 py-3 border border-[#dcebe5]">

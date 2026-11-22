@@ -1,9 +1,9 @@
-from pydantic import BaseModel,Field
+from pydantic import BaseModel, Field
 
-class Library(BaseModel): 
+
+class Library(BaseModel):
     library_id: str
     name: str
-    campus: str
+    campus: str = "IIT Bombay"
     floors: list[int] = Field(default_factory=list)
-    is_active: bool
-
+    is_active: bool = True

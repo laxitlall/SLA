@@ -1,5 +1,13 @@
+import sys
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+# Add repo root to sys.path so camera_cloud_capture can be imported directly
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
 from createRandomData import generate_campus_occupancy_data
 from database.db import db_instance, hash_password
@@ -10,6 +18,7 @@ from database.models import (
     LoginRequest,
     ProfileUpdateRequest,
     RaiseHandRequest,
+    RoomDetectRequest,
     RSVPCreateRequest,
     RSVPToggleRequest,
     SignupRequest,
@@ -292,7 +301,7 @@ async def toggle_rsvp(rsvp_id: str, payload: RSVPToggleRequest):
     return {"rsvp": updated}
 
 
-# ---------------- CCTV CAMPUS OCCUPANCY ----------------
+# ---------------- CCTV CAMPUS OCCUPANCY & CAMERA DETECTION ----------------
 @app.get("/api/occupancy")
 async def get_occupancy():
     return db_instance.get_occupancy()
@@ -303,3 +312,43 @@ async def refresh_occupancy():
     data = generate_campus_occupancy_data()
     db_instance.save_occupancy(data)
     return data
+
+
+@app.get("/api/camera/devices")
+async def get_camera_devices():
+    try:
+        from camera_cloud_capture.camera import list_devices
+
+        return {"devices": list_devices()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/occupancy/detect-room")
+async def detect_room_occupancy(payload: RoomDetectRequest):
+    """
+    Runs YOLOv11 seat + person + laptop + bag detection from camera_cloud_capture
+    and updates the room's seat availability in MongoDB Atlas.
+    """
+    try:
+        from camera_cloud_capture.detect_seats import detect_seats_from_source
+
+        seats = detect_seats_from_source(
+            image_path=payload.image_path,
+            camera_source=payload.camera_source,
+            seat_prefix=payload.room_id.upper(),
+        )
+        updated_campus = db_instance.update_room_seats(
+            zone_name=payload.zone_name,
+            room_id=payload.room_id,
+            seats=seats,
+        )
+        return {
+            "zone_name": payload.zone_name,
+            "room_id": payload.room_id,
+            "detected_seats_count": len(seats),
+            "seats": seats,
+            "timestamp": updated_campus.get("timestamp"),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

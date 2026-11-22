@@ -1,30 +1,9 @@
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-
-class SeatDetection(BaseModel):
-    person: bool = False
-    laptop: bool = False
-    bag: bool = False
-
-
-class Seat(BaseModel):
-    seat_id: str
-    detections: SeatDetection = Field(default_factory=SeatDetection)
-    computed_state: str = "AVAILABLE"  # AVAILABLE | SPOT_HELD | OCCUPIED
-    confidence_score: float = 0.95
-
-
-class Room(BaseModel):
-    room_id: str
-    room_name: str
-    seats: list[Seat] = Field(default_factory=list)
-
-
-class Zone(BaseModel):
-    zone_type: str  # "hostel" | "library"
-    name: str
-    rooms: list[Room] = Field(default_factory=list)
+from .camera import Camera
+from .libraries import Library
+from .room import Room, Seat, SeatDetection, Zone
 
 
 class SignupRequest(BaseModel):
@@ -72,7 +51,7 @@ class ConfirmHandRequest(BaseModel):
     user_roll: str
     extend_minutes: int = 60
 
-    
+
 class RSVPCreateRequest(BaseModel):
     creator_roll: str
     zone_name: str
@@ -85,3 +64,30 @@ class RSVPCreateRequest(BaseModel):
 
 class RSVPToggleRequest(BaseModel):
     user_roll: str
+
+
+class RoomDetectRequest(BaseModel):
+    zone_name: str = "Central Library"
+    room_id: str = "central-lib-room-1"
+    image_path: Optional[str] = None
+    camera_source: Optional[str] = None
+
+
+__all__ = [
+    "Camera",
+    "Library",
+    "SeatDetection",
+    "Seat",
+    "Room",
+    "Zone",
+    "SignupRequest",
+    "LoginRequest",
+    "ProfileUpdateRequest",
+    "FriendRequestCreate",
+    "FriendRequestRespond",
+    "RaiseHandRequest",
+    "ConfirmHandRequest",
+    "RSVPCreateRequest",
+    "RSVPToggleRequest",
+    "RoomDetectRequest",
+]

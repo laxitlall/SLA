@@ -81,8 +81,6 @@ def session_cmd(
     console.print(f"[green]Done.[/green] {uploader.frame_count} frames → {uploader.gcs_base}")
 
 
-<<<<<<< HEAD
-=======
 @app.command("detect")
 def detect_cmd(
     source: str = typer.Option("0", "--source", "-s", help="Device index or stream URL."),
@@ -105,7 +103,6 @@ def detect_cmd(
     console.print(f"[green]Done.[/green] Processed {frames} frame(s).")
 
 
->>>>>>> 782382c (Updated opt-in CLI preview)
 @app.command("serve")
 def serve_cmd(
     host: str = typer.Option(None, help="Bind host (defaults to API_HOST)."),
