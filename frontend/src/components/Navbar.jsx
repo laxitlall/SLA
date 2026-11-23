@@ -53,16 +53,6 @@ export default function Navbar({
                   </span>
                 )}
               </Link>
-              <Link
-                to="/profile"
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  location.pathname.startsWith("/profile")
-                    ? "bg-white text-greenfont shadow-sm"
-                    : "text-[#63706b] hover:text-greenfont"
-                }`}
-              >
-                Profile
-              </Link>
 </nav>
           )}
         </div>

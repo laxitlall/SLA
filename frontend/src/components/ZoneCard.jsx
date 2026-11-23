@@ -37,6 +37,7 @@ export default function ZoneCard({
               rooms & seats
             </p>
           </div>
+
           <span
             className={`px-2.5 py-1 text-xs rounded-full font-medium ${
               zone.availableSeats > 0
@@ -48,7 +49,6 @@ export default function ZoneCard({
           </span>
         </div>
 
-        {/* Availability Stats */}
         <div className="space-y-2">
           <div className="flex justify-between text-sm text-gray-600">
             <p>
@@ -256,6 +256,11 @@ export default function ZoneCard({
                   Occupied
                 </span>
               </div>
+              <Link to="/cv-monitor"
+                className="px-4 py-1.5 rounded-lg bg-greenfont text-white font-bold text-xs"
+              >
+                Show Detection
+              </Link>
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
