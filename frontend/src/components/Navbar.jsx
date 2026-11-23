@@ -3,13 +3,7 @@ import reactLogo from "../assets/react.svg";
 
 export function getInitials(name = "") {
   return (
-    name
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((w) => w[0].toUpperCase())
-      .slice(0, 2)
-      .join("") || "U"
+    name.trim().split(/\s+/).filter((word) => word!=="").map((w) => w[0].toUpperCase()).slice(0, 2).join("") || "A"
   );
 }
 
@@ -20,8 +14,6 @@ export default function Navbar({
   searchPlaceholder = "Search for libraries and study rooms",
   showSearch = false,
   activeHand = null,
-  onConfirmHand,
-  onLowerHand,
   pendingRequestsCount = 0,
 }) {
   const location = useLocation();
@@ -41,10 +33,7 @@ export default function Navbar({
               <Link
                 to="/room"
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  location.pathname === "/room" ||
-                  location.pathname === "/personal-room"
-                    ? "bg-white text-greenfont shadow-sm"
-                    : "text-[#63706b] hover:text-greenfont"
+                  location.pathname === "/room" ? "bg-white text-greenfont shadow-sm" : "text-[#63706b] hover:text-greenfont"
                 }`}
               >
                 Spaces
@@ -63,16 +52,6 @@ export default function Navbar({
                     {pendingRequestsCount}
                   </span>
                 )}
-              </Link>
-              <Link
-                to="/profile"
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  location.pathname.startsWith("/profile")
-                    ? "bg-white text-greenfont shadow-sm"
-                    : "text-[#63706b] hover:text-greenfont"
-                }`}
-              >
-                Profile
               </Link>
 </nav>
           )}
@@ -131,37 +110,6 @@ export default function Navbar({
           </div>
         )}
       </div>
-
-      {/* Auto-Unraise Check-in Notification Banner */}
-      {user && activeHand && activeHand.needs_confirmation && (
-        <div className="bg-amber-50 border-t border-amber-200 px-5 lg:px-10 py-2.5 flex flex-col sm:flex-row justify-between items-center gap-3">
-          <div className="text-xs sm:text-sm text-amber-900 font-medium">
-            ⏰ <strong>Check-in Confirmation:</strong> Your raised hand at{" "}
-            <strong>
-              {activeHand.zone_name} ({activeHand.room_name})
-            </strong>{" "}
-            will auto-unraise in{" "}
-            <strong>{activeHand.remaining_minutes} min</strong>. Are you still
-            studying there?
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={onConfirmHand}
-              className="px-3 py-1.5 rounded-lg bg-greenfont text-white text-xs font-bold hover:opacity-95"
-            >
-              Yes, still here (+1 hr)
-            </button>
-            <button
-              type="button"
-              onClick={onLowerHand}
-              className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-amber-900 text-xs font-bold hover:bg-amber-100"
-            >
-              No, unraise hand
-            </button>
-          </div>
-        </div>
-      )}
     </header>
   );
 }

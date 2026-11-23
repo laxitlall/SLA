@@ -5,18 +5,21 @@ const FALLBACK_STORE_KEY = "studyspot_fallback_store_v3";
 export function getCurrentUser() {
   try {
     const raw = localStorage.getItem(USER_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    let data;
+    if(raw){
+      data = JSON.parse(raw);
+    }
+    else{
+      data = null;
+    }
+    return data;
   } catch {
     return null;
   }
 }
 
 export function setCurrentUser(user) {
-  if (!user) {
-    localStorage.removeItem(USER_STORAGE_KEY);
-  } else {
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
-  }
+  localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
 }
 
 export function logoutUser() {
@@ -125,7 +128,6 @@ async function tryFetch(path, options = {}) {
   return data;
 }
 
-// ---------------- EXPORTED API METHODS ----------------
 export async function apiLogin(roll_number, password) {
   try {
     const data = await tryFetch("/api/auth/login", {

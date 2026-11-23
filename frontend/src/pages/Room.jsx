@@ -34,7 +34,6 @@ export default function Room() {
   const [rsvps, setRsvps] = useState([]);
   const [showRsvpSection, setShowRsvpSection] = useState(false);
 
-  // Modal state for scheduling an RSVP or adding a note when raising hand
   const [rsvpModalRoom, setRsvpModalRoom] = useState(null);
   const [rsvpTopic, setRsvpTopic] = useState("Endsem Group Study");
   const [rsvpStartTime, setRsvpStartTime] = useState("Today, 8:00 PM");
@@ -177,16 +176,11 @@ export default function Room() {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         activeHand={activeHand}
-        onConfirmHand={handleConfirmHand}
-        onLowerHand={handleLowerHand}
         pendingRequestsCount={friendsOverview.incoming_requests?.length || 0}
       />
 
       <main className="max-w-[1380px] px-5 py-8 mx-auto lg:px-10 lg:py-10">
-        {/* Recorded Roboflow inference, separate from the live seat grid and RSVP */}
-        <CvDemoPanel compact />
 
-        {/* Top Greeting & Live Indicator */}
         <section className="flex flex-col gap-5 justify-between items-end md:flex-row">
           <div className="w-full md:w-fit">
             <div className="mb-2 text-sm font-medium text-lightgreenfont">
@@ -205,19 +199,7 @@ export default function Room() {
             <span className="text-[#929a96]">Updated just now</span>
           </div>
         </section>
-
-        {/* Mobile Search Bar */}
-        <div className="mt-5 flex bg-white border border-[#e3e8e5] rounded-xl px-3 py-2.5 md:hidden">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search for libraries and study rooms"
-            className="w-full bg-transparent text-greenfont placeholder:text-grayfont font-medium text-sm outline-none"
-          />
-        </div>
-
-        {/* Logged-in Social & Raise-Hand Summary Banner (Merged from PersonalRoom.jsx) */}
+        
         {user && (
           <section className="mt-8 flex flex-col gap-5 justify-between md:flex-row">
             <div className="flex flex-col sm:flex-row flex-2 justify-between gap-4 rounded-xl bg-greenfont p-5 text-white">
