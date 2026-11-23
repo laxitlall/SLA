@@ -1,19 +1,30 @@
 import hashlib
 import json
 import os
+import re
 import uuid
+from typing import Any, Iterable
+
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent / "atlas-credentials.env")
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+from pymongo import AsyncMongoClient, ReturnDocument
+from pymongo.errors import DuplicateKeyError 
+
+
+logger = logging.getLogger("studyspot.db")
+
+
+load_dotenv(os.path.join(Path(__file__).resolve().parent.parent,"atlas-credentials.env"))
+load_dotenv(os.path.join(Path(__file__).resolve().parent.parent,".env"))
 
 MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
-MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "studyspot").strip()
+DB_NAME = os.getenv("DB_NAME", "sl_db").strip()
 
 BASE_DIR = Path(__file__).resolve().parent
-OCCUPANCY_FILE = BASE_DIR / "campus_occupancy.json"
+# OCCUPANCY_FILE = BASE_DIR / "campus_occupancy.json"
 
 
 def hash_password(password: str) -> str:
@@ -33,36 +44,67 @@ def parse_iso(iso_str: str) -> datetime:
         iso_str = iso_str[:-1] + "+00:00"
     return datetime.fromisoformat(iso_str)
 
+OCCUPANCY_DOC_ID = "campus_live"
 
-DEFAULT_USERS = [
-    {
-        "roll_number": "26M0821",
-        "full_name": "Laxit Lall",
-        "email": "26m0821@iitb.ac.in",
-        "password_hash": hash_password("password123"),
-        "branch": "Computer Science",
-        "hostel": "Hostel 15",
-        "bio": "Ghare jaake sutti babu",
-    },
-    {
-        "roll_number": "26M0829",
-        "full_name": "Ayush Raj",
-        "email": "26m0829@iitb.ac.in",
-        "password_hash": hash_password("password123"),
-        "branch": "Computer Science",
-        "hostel": "Hostel 15",
-        "bio": "Ghare jaake sutti babu",
-    },
-    {
-        "roll_number": "26M0828",
-        "full_name": "sushil kumar",
-        "email": "26m0828@iitb.ac.in",
-        "password_hash": hash_password("password123"),
-        "branch": "Computer Science",
-        "hostel": "Hostel 10",
-        "bio": "Ghare jaake sutti babu",
-    },
-]
+# Fields that exist only for authentication/security and are never returned to clients.
+INTERNAL_USER_FIELDS = (
+    "password_hash",
+    "token_version",
+    "failed_login_count",
+    "locked_until",
+    "last_login_at",
+    "created_at",
+)
+EDITABLE_PROFILE_FIELDS = ("full_name", "branch", "hostel", "bio")
+
+
+def _exclude(*fields: str) -> dict[str, int]:
+    return {"_id": 0, **{field: 0 for field in fields}}
+
+
+SELF_PROJECTION = _exclude(*INTERNAL_USER_FIELDS)
+# What other students may see: no e-mail address, no role.
+OTHER_PROJECTION = _exclude(*INTERNAL_USER_FIELDS, "email", "role")
+
+
+def strip_internal(user: dict) -> dict:
+    """Remove security-internal fields from a full user document."""
+    
+    clean = {k: v for k, v in user.items() if k not in INTERNAL_USER_FIELDS and k != "_id"}
+    clean.setdefault("role", "student")
+    return clean
+
+
+
+# DEFAULT_USERS = [
+#     {
+#         "roll_number": "26M0821",
+#         "full_name": "Laxit Lall",
+#         "email": "26m0821@iitb.ac.in",
+#         "password_hash": hash_password("password123"),
+#         "branch": "Computer Science",
+#         "hostel": "Hostel 15",
+#         "bio": "Ghare jaake sutti babu",
+#     },
+#     {
+#         "roll_number": "26M0829",
+#         "full_name": "Ayush Raj",
+#         "email": "26m0829@iitb.ac.in",
+#         "password_hash": hash_password("password123"),
+#         "branch": "Computer Science",
+#         "hostel": "Hostel 15",
+#         "bio": "Ghare jaake sutti babu",
+#     },
+#     {
+#         "roll_number": "26M0828",
+#         "full_name": "sushil kumar",
+#         "email": "26m0828@iitb.ac.in",
+#         "password_hash": hash_password("password123"),
+#         "branch": "Computer Science",
+#         "hostel": "Hostel 10",
+#         "bio": "Ghare jaake sutti babu",
+#     },
+# ]
 
 
 class StudySpotDatabase:
@@ -71,330 +113,231 @@ class StudySpotDatabase:
     Connects to MongoDB Atlas when MONGODB_URI is provided in backend/.env.
     Falls back seamlessly to an in-memory/JSON store if MONGODB_URI is not configured yet.
     """
-
+    # -----------Setup and Intialization----------#
     def __init__(self):
-        self.mongo_client = None
+        self.mongo_client = AsyncMongoClient | None
         self.db = None
         self.using_cloud = False
         self._connect()
 
-    def _connect(self):
-        if MONGODB_URI and "<username>" not in MONGODB_URI:
-            try:
-                from pymongo import MongoClient
+    async def _connect(self) -> None:
+        self.client = AsyncMongoClient(
+            host=MONGODB_URI,
+            serverSelectionTimeoutMS=5000,
+            tz_aware=True
+        )
+        await self.client.admin.command("ping") 
+        self.db = self.client[DB_NAME]
+        await self._ensure_indexes()
+        logger.info("Connected to MongoDB database %r", DB_NAME)
 
-                self.mongo_client = MongoClient(
-                    MONGODB_URI, serverSelectionTimeoutMS=5000
-                )
-                self.mongo_client.admin.command("ping")
-                self.db = self.mongo_client[MONGODB_DB_NAME]
-                self.using_cloud = True
-                self._init_mongo_indexes_and_seed()
-                print(f"[MongoDB Atlas] Connected to cloud database: {MONGODB_DB_NAME}")
-                return
-            except Exception as exc:
-                print(
-                    f"[MongoDB Atlas] Could not connect ({exc}). Using local JSON mirror until MONGODB_URI is configured."
-                )
+    
+    async def close(self) -> None:
+        if self.client is not None:
+            await self.client.close()
+        self.client = None
+        self.db = None
 
-        self.using_cloud = False
-        self._init_local_seed()
+    
+    async def ping(self) -> bool:
+        try:
+            await self.client.admin.command("ping")
+            return True
+        except Exception:  # noqa: BLE001 - any failure (incl. not connected) means "down"
+            return False
 
-    def _default_seed_data(self):
-        return {
-            "users": list(DEFAULT_USERS),
-            "friendships": [],
-            "active_hands": [],
-            "rsvps": [],
-        }
 
-    def _init_mongo_indexes_and_seed(self):
-        self.db.users.create_index("roll_number", unique=True)
-        self.db.friendships.create_index(
+    async def _ensure_indexes(self) -> None:
+        db = self.db
+        await db.users.create_index("roll_number", unique=True)
+        await db.users.create_index("email", unique=True)
+        await db.friendships.create_index(
             [("sender_roll", 1), ("receiver_roll", 1)], unique=True
         )
-        self.db.active_hands.create_index("user_roll", unique=True)
-        # MongoDB TTL index: auto-unraises hand when expires_at_dt is reached
-        self.db.active_hands.create_index("expires_at_dt", expireAfterSeconds=0)
-        self.db.rsvps.create_index("rsvp_id", unique=True)
+        await db.friendships.create_index("receiver_roll")
+        await db.active_hands.create_index("user_roll", unique=True)
+        # TTL index: MongoDB removes a raised hand shortly after expires_at_dt passes.
+        await db.active_hands.create_index("expires_at_dt", expireAfterSeconds=0)
+        await db.rsvps.create_index("rsvp_id", unique=True)
+        await db.rsvps.create_index("participants.roll_number")
+        await db.refresh_tokens.create_index("jti", unique=True)
+        await db.refresh_tokens.create_index("family_id")
+        await db.refresh_tokens.create_index("user_roll")
+        await db.refresh_tokens.create_index("expires_at", expireAfterSeconds=0)
+        await db.libraries.create_index("library_id", unique=True)
+        await db.cameras.create_index("camera_id", unique=True)
 
-        seed = self._default_seed_data()
-        for user_doc in seed["users"]:
-            self.db.users.update_one(
-                {"roll_number": user_doc["roll_number"]},
-                {"$setOnInsert": user_doc},
-                upsert=True,
-            )
-        if self.db.occupancy.count_documents({"_id": "campus_live"}) == 0:
-            if OCCUPANCY_FILE.exists():
-                with open(OCCUPANCY_FILE, "r", encoding="utf-8") as f:
-                    occ = json.load(f)
-                occ["_id"] = "campus_live"
-                self.db.occupancy.replace_one({"_id": "campus_live"}, occ, upsert=True)
-
-    def _init_local_seed(self):
-        self.local_file = BASE_DIR / "local_cloud_mirror.json"
-        if not self.local_file.exists():
-            seed = self._default_seed_data()
-            with open(self.local_file, "w", encoding="utf-8") as f:
-                json.dump(seed, f, indent=2)
-
-    def _read_local(self) -> dict:
-        with open(self.local_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Purge expired hands automatically
-        now = utc_now()
-        valid_hands = [
-            h
-            for h in data.get("active_hands", [])
-            if parse_iso(h["expires_at"]) > now
-        ]
-        if len(valid_hands) != len(data.get("active_hands", [])):
-            data["active_hands"] = valid_hands
-            self._write_local(data)
-        return data
-
-    def _write_local(self, data: dict):
-        with open(self.local_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+    #--------------- Setup ends --------------#
+        
 
     # ---------------- USERS ----------------
-    def get_user(self, roll_number: str) -> dict | None:
+    # TODO tell laxit to change requests
+    async def get_user(self, roll_number: str,include_private: bool = True) -> dict | None:
+        # roll = roll_number.strip().upper()
+        projection = SELF_PROJECTION if include_private else OTHER_PROJECTION
+        doc = await self.db.users.find_one({"roll_number": roll_number.strip().upper()}, projection)
+        if doc and include_private:
+            doc.setdefault("role", "student")
+        return doc
+    
+
+    async def create_user(self, user_doc: dict) -> dict:
+        doc = {
+            "role": "student",
+            "token_version": 0,
+            "failed_login_count": 0,
+            "locked_until": None,
+            "created_at": utc_now(),
+            **user_doc,
+        }
+        doc["roll_number"] = doc["roll_number"].strip().upper()
+        doc["email"] = doc["email"].strip().lower()
+        await self.db.users.insert_one(dict(doc))
+        return strip_internal(doc)
+
+    async def update_user(self, roll_number: str, updates: dict) -> dict | None:
         roll = roll_number.strip().upper()
-        if self.using_cloud:
-            doc = self.db.users.find_one(
-                {"roll_number": {"$regex": f"^{roll}$", "$options": "i"}}, {"_id": 0}
-            )
-            return doc
-        data = self._read_local()
-        for u in data["users"]:
-            if u["roll_number"].upper() == roll:
-                return dict(u)
-        return None
+        clean = {k: v for k, v in updates.items() if k in EDITABLE_PROFILE_FIELDS and v is not None}
+        if clean:
+            result = await self.db.users.update_one({"roll_number": roll}, {"$set": clean})
+            if result.matched_count == 0:
+                return None
+        return await self.get_user(roll)
 
-    def create_user(self, user_doc: dict) -> dict:
-        user_doc["roll_number"] = user_doc["roll_number"].strip().upper()
-        if self.using_cloud:
-            self.db.users.insert_one(dict(user_doc))
-        else:
-            data = self._read_local()
-            data["users"].append(dict(user_doc))
-            self._write_local(data)
-        result = dict(user_doc)
-        result.pop("password_hash", None)
-        result.pop("_id", None)
-        return result
+    async def search_users(self, query: str,limit: int = 50) -> list[dict]:
+        q = query.strip()
+        flt: dict[str, Any] = {}
+        if q:
+            pattern = re.escape(q)  # user input is matched literally, never as a regex
+            flt = {
+                "$or": [
+                    {field: {"$regex": pattern, "$options": "i"}}
+                    for field in ("roll_number", "full_name", "branch", "hostel")
+                ]
+            }
+        cursor = self.db.users.find(flt, OTHER_PROJECTION).sort("roll_number", 1).limit(limit)
+        return await cursor.to_list(length=limit)
 
-    def update_user(self, roll_number: str, updates: dict) -> dict | None:
-        roll = roll_number.strip().upper()
-        clean_updates = {k: v for k, v in updates.items() if v is not None}
-        if self.using_cloud:
-            self.db.users.update_one(
-                {"roll_number": {"$regex": f"^{roll}$", "$options": "i"}},
-                {"$set": clean_updates},
-            )
-        else:
-            data = self._read_local()
-            for u in data["users"]:
-                if u["roll_number"].upper() == roll:
-                    u.update(clean_updates)
-                    break
-            self._write_local(data)
-        user = self.get_user(roll)
-        if user:
-            user.pop("password_hash", None)
-        return user
+    #-------------------User Ends----------------#
 
-    def search_users(self, query: str) -> list[dict]:
-        q = query.strip().lower()
-        if self.using_cloud:
-            if not q:
-                cursor = self.db.users.find({}, {"_id": 0, "password_hash": 0})
-            else:
-                cursor = self.db.users.find(
-                    {
-                        "$or": [
-                            {"roll_number": {"$regex": q, "$options": "i"}},
-                            {"full_name": {"$regex": q, "$options": "i"}},
-                            {"branch": {"$regex": q, "$options": "i"}},
-                            {"hostel": {"$regex": q, "$options": "i"}},
-                        ]
-                    },
-                    {"_id": 0, "password_hash": 0},
-                )
-            return list(cursor)
-
-        data = self._read_local()
-        results = []
-        for u in data["users"]:
-            if (
-                not q
-                or q in u["roll_number"].lower()
-                or q in u["full_name"].lower()
-                or q in u.get("branch", "").lower()
-                or q in u.get("hostel", "").lower()
-            ):
-                copy_u = dict(u)
-                copy_u.pop("password_hash", None)
-                results.append(copy_u)
-        return results
 
     # ---------------- FRIENDSHIPS ----------------
-    def get_all_friendships_for_user(self, roll_number: str) -> list[dict]:
+    async def get_all_friendships_for_user(self, roll_number: str) -> list[dict]:
         roll = roll_number.strip().upper()
-        if self.using_cloud:
-            cursor = self.db.friendships.find(
-                {"$or": [{"sender_roll": roll}, {"receiver_roll": roll}]},
-                {"_id": 0},
-            )
-            return list(cursor)
-        data = self._read_local()
-        return [
-            f
-            for f in data["friendships"]
-            if f["sender_roll"].upper() == roll or f["receiver_roll"].upper() == roll
-        ]
+        cursor = self.db.friendships.find(
+            {"$or": [{"sender_roll": roll}, {"receiver_roll": roll}]}, {"_id": 0}
+        )
+        return await cursor.to_list(length=None)
 
-    def get_relationship(self, user_a: str, user_b: str) -> dict:
-        a = user_a.strip().upper()
-        b = user_b.strip().upper()
+
+
+    async def get_relationship(self, user_a: str, user_b: str) -> dict:
+        a, b = user_a.strip().upper(), user_b.strip().upper()
         if a == b:
             return {"status": "SELF"}
-        friendships = self.get_all_friendships_for_user(a)
-        for f in friendships:
-            s = f["sender_roll"].upper()
-            r = f["receiver_roll"].upper()
-            if (s == a and r == b) or (s == b and r == a):
-                if f["status"] == "ACCEPTED":
-                    return {"status": "FRIENDS"}
-                if s == a:
-                    return {"status": "OUTGOING_PENDING"}
-                return {"status": "INCOMING_PENDING"}
-        return {"status": "NONE"}
+        f = await self.db.friendships.find_one(
+            {
+                "$or": [
+                    {"sender_roll": a, "receiver_roll": b},
+                    {"sender_roll": b, "receiver_roll": a},
+                ]
+            },
+            {"_id": 0},
+        )
+        if not f:
+            return {"status": "NONE"}
+        if f["status"] == "ACCEPTED":
+            return {"status": "FRIENDS"}
+        if f["sender_roll"].upper() == a:
+            return {"status": "OUTGOING_PENDING"}
+        return {"status": "INCOMING_PENDING"}
 
-    def send_friend_request(self, sender_roll: str, receiver_roll: str) -> dict:
-        s = sender_roll.strip().upper()
-        r = receiver_roll.strip().upper()
-        rel = self.get_relationship(s, r)["status"]
+    async def send_friend_request(self, sender_roll: str, receiver_roll: str) -> dict:
+        s, r = sender_roll.strip().upper(), receiver_roll.strip().upper()
+        rel = (await self.get_relationship(s, r))["status"]
         if rel in ("FRIENDS", "OUTGOING_PENDING"):
             return {"status": rel}
-        if rel == "INCOMING_PENDING":
-            return self.respond_friend_request(r, s, "ACCEPT")
-
-        doc = {
-            "sender_roll": s,
-            "receiver_roll": r,
-            "status": "PENDING",
-            "created_at": iso_z(utc_now()),
-        }
-        if self.using_cloud:
-            self.db.friendships.insert_one(dict(doc))
-        else:
-            data = self._read_local()
-            data["friendships"].append(doc)
-            self._write_local(data)
-        return {"status": "OUTGOING_PENDING"}
-
-    def respond_friend_request(
-        self, sender_roll: str, receiver_roll: str, action: str
-    ) -> dict:
-        s = sender_roll.strip().upper()
-        r = receiver_roll.strip().upper()
-        act = action.strip().upper()
-        if self.using_cloud:
-            if act == "ACCEPT":
-                self.db.friendships.update_one(
-                    {"sender_roll": s, "receiver_roll": r},
-                    {"$set": {"status": "ACCEPTED"}},
-                )
-                return {"status": "FRIENDS"}
-            else:
-                self.db.friendships.delete_one({"sender_roll": s, "receiver_roll": r})
-                return {"status": "NONE"}
-        else:
-            data = self._read_local()
-            if act == "ACCEPT":
-                for f in data["friendships"]:
-                    if f["sender_roll"].upper() == s and f["receiver_roll"].upper() == r:
-                        f["status"] = "ACCEPTED"
-                self._write_local(data)
-                return {"status": "FRIENDS"}
-            else:
-                data["friendships"] = [
-                    f
-                    for f in data["friendships"]
-                    if not (
-                        f["sender_roll"].upper() == s
-                        and f["receiver_roll"].upper() == r
-                    )
-                ]
-                self._write_local(data)
-                return {"status": "NONE"}
-
-    def remove_friend(self, user_a: str, user_b: str):
-        a = user_a.strip().upper()
-        b = user_b.strip().upper()
-        if self.using_cloud:
-            self.db.friendships.delete_many(
+        if rel == "INCOMING_PENDING":  # they already asked us: sending one back accepts it
+            return await self.respond_friend_request(r, s, "ACCEPT") or {"status": "NONE"}
+        try:
+            await self.db.friendships.insert_one(
                 {
-                    "$or": [
-                        {"sender_roll": a, "receiver_roll": b},
-                        {"sender_roll": b, "receiver_roll": a},
-                    ]
+                    "sender_roll": s,
+                    "receiver_roll": r,
+                    "status": "PENDING",
+                    "created_at": iso_z(utc_now()),
                 }
             )
-        else:
-            data = self._read_local()
-            data["friendships"] = [
-                f
-                for f in data["friendships"]
-                if not (
-                    (f["sender_roll"].upper() == a and f["receiver_roll"].upper() == b)
-                    or (
-                        f["sender_roll"].upper() == b
-                        and f["receiver_roll"].upper() == a
-                    )
-                )
-            ]
-            self._write_local(data)
+        except DuplicateKeyError:  # double-click / concurrent request
+            pass
+        return {"status": "OUTGOING_PENDING"}
+
+    async def respond_friend_request(self, sender_roll: str, receiver_roll: str, action: str) -> dict:
+        s, r = sender_roll.strip().upper(), receiver_roll.strip().upper()
+        pending = {"sender_roll": s, "receiver_roll": r, "status": "PENDING"}
+        if action.strip().upper() == "ACCEPT":
+            result = await self.db.friendships.update_one(
+                pending, {"$set": {"status": "ACCEPTED", "accepted_at": iso_z(utc_now())}}
+            )
+            return {"status": "FRIENDS"} if result.matched_count else None
+        result = await self.db.friendships.delete_one(pending)
+        return {"status": "NONE"} if result.deleted_count else None
+
+    async def remove_friend(self, user_a: str, user_b: str) -> None:
+        a, b = user_a.strip().upper(), user_b.strip().upper()
+        await self.db.friendships.delete_many(
+            {
+                "$or": [
+                    {"sender_roll": a, "receiver_roll": b},
+                    {"sender_roll": b, "receiver_roll": a},
+                ]
+            }
+        )
 
     # ---------------- RAISE HAND (ACTIVE CHECK-INS) ----------------
-    def get_active_hands(self) -> list[dict]:
+    async def _enrich_hands(self, hands: list[dict]) -> list[dict]:
         now = utc_now()
-        if self.using_cloud:
-            cursor = self.db.active_hands.find(
-                {"expires_at_dt": {"$gt": now}}, {"_id": 0, "expires_at_dt": 0}
-            )
-            hands = list(cursor)
-        else:
-            data = self._read_local()
-            hands = data.get("active_hands", [])
-
+        users = await self.get_users_by_rolls([h["user_roll"] for h in hands])
         enriched = []
         for h in hands:
-            user = self.get_user(h["user_roll"])
-            expires_dt = parse_iso(h["expires_at"])
-            remaining_mins = max(0, int((expires_dt - now).total_seconds() // 60))
+            user = users.get(h["user_roll"].upper())
+            expires = h.pop("expires_at_dt", None) or parse_iso(h["expires_at"])
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            remaining = max(0, int((expires - now).total_seconds() // 60))
             enriched.append(
                 {
                     **h,
                     "full_name": user["full_name"] if user else h["user_roll"],
                     "branch": user.get("branch", "") if user else "",
                     "hostel": user.get("hostel", "") if user else "",
-                    "remaining_minutes": remaining_mins,
-                    "needs_confirmation": remaining_mins <= 15,
+                    "remaining_minutes": remaining,
+                    "needs_confirmation": remaining <= 15,
                 }
             )
         return enriched
 
-    def get_user_hand(self, user_roll: str) -> dict | None:
+    async def get_active_hands(self, rolls: Iterable[str] | None = None) -> list[dict]:
+        """Active hands, optionally restricted to the given roll numbers."""
+        flt: dict[str, Any] = {"expires_at_dt": {"$gt": utc_now()}}
+        if rolls is not None:
+            wanted = list({r.strip().upper() for r in rolls})
+            if not wanted:
+                return []
+            flt["user_roll"] = {"$in": wanted}
+        cursor = self.db.active_hands.find(flt, {"_id": 0})
+        return await self._enrich_hands(await cursor.to_list(length=None))
+
+
+
+    async def get_user_hand(self, user_roll: str) -> dict | None:
         roll = user_roll.strip().upper()
         for h in self.get_active_hands():
             if h["user_roll"].upper() == roll:
                 return h
         return None
 
-    def raise_hand(
+    async def raise_hand(
         self,
         user_roll: str,
         zone_name: str,
@@ -429,7 +372,7 @@ class StudySpotDatabase:
             self._write_local(data)
         return self.get_user_hand(roll)
 
-    def confirm_hand(self, user_roll: str, extend_minutes: int = 60) -> dict | None:
+    async def confirm_hand(self, user_roll: str, extend_minutes: int = 60) -> dict | None:
         roll = user_roll.strip().upper()
         current = self.get_user_hand(roll)
         if not current:
@@ -454,7 +397,7 @@ class StudySpotDatabase:
             self._write_local(data)
         return self.get_user_hand(roll)
 
-    def lower_hand(self, user_roll: str):
+    async def lower_hand(self, user_roll: str):
         roll = user_roll.strip().upper()
         if self.using_cloud:
             self.db.active_hands.delete_one({"user_roll": roll})
@@ -466,7 +409,7 @@ class StudySpotDatabase:
             self._write_local(data)
 
     # ---------------- RSVPS (POKEMON GO STYLE LOBBIES) ----------------
-    def get_rsvps(self, zone_name: str | None = None) -> list[dict]:
+    async def get_rsvps(self, zone_name: str | None = None) -> list[dict]:
         if self.using_cloud:
             query = {"zone_name": zone_name} if zone_name else {}
             return list(self.db.rsvps.find(query, {"_id": 0}))
@@ -476,7 +419,7 @@ class StudySpotDatabase:
             return [r for r in rsvps if r["zone_name"] == zone_name]
         return rsvps
 
-    def create_rsvp(
+    async def create_rsvp(
         self,
         creator_roll: str,
         zone_name: str,
@@ -509,7 +452,7 @@ class StudySpotDatabase:
             self._write_local(data)
         return rsvp_doc
 
-    def toggle_rsvp_participant(self, rsvp_id: str, user_roll: str) -> dict | None:
+    async def toggle_rsvp_participant(self, rsvp_id: str, user_roll: str) -> dict | None:
         roll = user_roll.strip().upper()
         user = self.get_user(roll)
         full_name = user["full_name"] if user else roll
@@ -552,7 +495,7 @@ class StudySpotDatabase:
         return target
 
     # ---------------- CCTV CAMPUS OCCUPANCY ----------------
-    def get_occupancy(self) -> dict:
+    async def get_occupancy(self) -> dict:
         if self.using_cloud:
             doc = self.db.occupancy.find_one({"_id": "campus_live"}, {"_id": 0})
             if doc:
@@ -562,14 +505,14 @@ class StudySpotDatabase:
                 return json.load(f)
         return {"timestamp": iso_z(utc_now()), "zones": []}
 
-    def save_occupancy(self, campus_data: dict):
+    async def save_occupancy(self, campus_data: dict):
         with open(OCCUPANCY_FILE, "w", encoding="utf-8") as f:
             json.dump(campus_data, f, indent=4)
         if self.using_cloud:
             doc = {**campus_data, "_id": "campus_live"}
             self.db.occupancy.replace_one({"_id": "campus_live"}, doc, upsert=True)
 
-    def update_room_seats(
+    async def update_room_seats(
         self, zone_name: str, room_id: str, seats: list[dict]
     ) -> dict:
         campus_data = self.get_occupancy()
