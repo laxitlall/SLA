@@ -74,7 +74,7 @@ export default function Navbar({
               >
                 Profile
               </Link>
-            </nav>
+</nav>
           )}
         </div>
 
