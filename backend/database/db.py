@@ -2,18 +2,25 @@ import hashlib
 import json
 import os
 import uuid
+
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent / "atlas-credentials.env")
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+from pymongo import AsyncMongoClient, ReturnDocument
+
+logger = logging.getLogger("studyspot.db")
+
+
+load_dotenv(os.path.join(Path(__file__).resolve().parent.parent,"atlas-credentials.env"))
+load_dotenv(os.path.join(Path(__file__).resolve().parent.parent,".env"))
 
 MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
-MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "studyspot").strip()
+DB_NAME = os.getenv("DB_NAME", "sl_db").strip()
 
 BASE_DIR = Path(__file__).resolve().parent
-OCCUPANCY_FILE = BASE_DIR / "campus_occupancy.json"
+# OCCUPANCY_FILE = BASE_DIR / "campus_occupancy.json"
 
 
 def hash_password(password: str) -> str:
@@ -34,35 +41,35 @@ def parse_iso(iso_str: str) -> datetime:
     return datetime.fromisoformat(iso_str)
 
 
-DEFAULT_USERS = [
-    {
-        "roll_number": "26M0821",
-        "full_name": "Laxit Lall",
-        "email": "26m0821@iitb.ac.in",
-        "password_hash": hash_password("password123"),
-        "branch": "Computer Science",
-        "hostel": "Hostel 15",
-        "bio": "Ghare jaake sutti babu",
-    },
-    {
-        "roll_number": "26M0829",
-        "full_name": "Ayush Raj",
-        "email": "26m0829@iitb.ac.in",
-        "password_hash": hash_password("password123"),
-        "branch": "Computer Science",
-        "hostel": "Hostel 15",
-        "bio": "Ghare jaake sutti babu",
-    },
-    {
-        "roll_number": "26M0828",
-        "full_name": "sushil kumar",
-        "email": "26m0828@iitb.ac.in",
-        "password_hash": hash_password("password123"),
-        "branch": "Computer Science",
-        "hostel": "Hostel 10",
-        "bio": "Ghare jaake sutti babu",
-    },
-]
+# DEFAULT_USERS = [
+#     {
+#         "roll_number": "26M0821",
+#         "full_name": "Laxit Lall",
+#         "email": "26m0821@iitb.ac.in",
+#         "password_hash": hash_password("password123"),
+#         "branch": "Computer Science",
+#         "hostel": "Hostel 15",
+#         "bio": "Ghare jaake sutti babu",
+#     },
+#     {
+#         "roll_number": "26M0829",
+#         "full_name": "Ayush Raj",
+#         "email": "26m0829@iitb.ac.in",
+#         "password_hash": hash_password("password123"),
+#         "branch": "Computer Science",
+#         "hostel": "Hostel 15",
+#         "bio": "Ghare jaake sutti babu",
+#     },
+#     {
+#         "roll_number": "26M0828",
+#         "full_name": "sushil kumar",
+#         "email": "26m0828@iitb.ac.in",
+#         "password_hash": hash_password("password123"),
+#         "branch": "Computer Science",
+#         "hostel": "Hostel 10",
+#         "bio": "Ghare jaake sutti babu",
+#     },
+# ]
 
 
 class StudySpotDatabase:
@@ -71,92 +78,62 @@ class StudySpotDatabase:
     Connects to MongoDB Atlas when MONGODB_URI is provided in backend/.env.
     Falls back seamlessly to an in-memory/JSON store if MONGODB_URI is not configured yet.
     """
-
+    # -----------Setup and Intialization----------#
     def __init__(self):
-        self.mongo_client = None
+        self.mongo_client = AsyncMongoClient | None
         self.db = None
         self.using_cloud = False
         self._connect()
 
-    def _connect(self):
-        if MONGODB_URI and "<username>" not in MONGODB_URI:
-            try:
-                from pymongo import MongoClient
+    async def _connect(self) -> None:
+        self.client = AsyncMongoClient(
+            host=MONGODB_URI,
+            serverSelectionTimeoutMS=5000,
+            tz_aware=True
+        )
+        await self.client.admin.command("ping") 
+        self.db = self.client[DB_NAME]
+        await self._ensure_indexes()
+        logger.info("Connected to MongoDB database %r", DB_NAME)
 
-                self.mongo_client = MongoClient(
-                    MONGODB_URI, serverSelectionTimeoutMS=5000
-                )
-                self.mongo_client.admin.command("ping")
-                self.db = self.mongo_client[MONGODB_DB_NAME]
-                self.using_cloud = True
-                self._init_mongo_indexes_and_seed()
-                print(f"[MongoDB Atlas] Connected to cloud database: {MONGODB_DB_NAME}")
-                return
-            except Exception as exc:
-                print(
-                    f"[MongoDB Atlas] Could not connect ({exc}). Using local JSON mirror until MONGODB_URI is configured."
-                )
+    
+    async def close(self) -> None:
+        if self.client is not None:
+            await self.client.close()
+        self.client = None
+        self.db = None
 
-        self.using_cloud = False
-        self._init_local_seed()
+    
+    async def ping(self) -> bool:
+        try:
+            await self.client.admin.command("ping")
+            return True
+        except Exception:  # noqa: BLE001 - any failure (incl. not connected) means "down"
+            return False
 
-    def _default_seed_data(self):
-        return {
-            "users": list(DEFAULT_USERS),
-            "friendships": [],
-            "active_hands": [],
-            "rsvps": [],
-        }
 
-    def _init_mongo_indexes_and_seed(self):
-        self.db.users.create_index("roll_number", unique=True)
-        self.db.friendships.create_index(
+    async def _ensure_indexes(self) -> None:
+        db = self.db
+        await db.users.create_index("roll_number", unique=True)
+        await db.users.create_index("email", unique=True)
+        await db.friendships.create_index(
             [("sender_roll", 1), ("receiver_roll", 1)], unique=True
         )
-        self.db.active_hands.create_index("user_roll", unique=True)
-        # MongoDB TTL index: auto-unraises hand when expires_at_dt is reached
-        self.db.active_hands.create_index("expires_at_dt", expireAfterSeconds=0)
-        self.db.rsvps.create_index("rsvp_id", unique=True)
+        await db.friendships.create_index("receiver_roll")
+        await db.active_hands.create_index("user_roll", unique=True)
+        # TTL index: MongoDB removes a raised hand shortly after expires_at_dt passes.
+        await db.active_hands.create_index("expires_at_dt", expireAfterSeconds=0)
+        await db.rsvps.create_index("rsvp_id", unique=True)
+        await db.rsvps.create_index("participants.roll_number")
+        await db.refresh_tokens.create_index("jti", unique=True)
+        await db.refresh_tokens.create_index("family_id")
+        await db.refresh_tokens.create_index("user_roll")
+        await db.refresh_tokens.create_index("expires_at", expireAfterSeconds=0)
+        await db.libraries.create_index("library_id", unique=True)
+        await db.cameras.create_index("camera_id", unique=True)
 
-        seed = self._default_seed_data()
-        for user_doc in seed["users"]:
-            self.db.users.update_one(
-                {"roll_number": user_doc["roll_number"]},
-                {"$setOnInsert": user_doc},
-                upsert=True,
-            )
-        if self.db.occupancy.count_documents({"_id": "campus_live"}) == 0:
-            if OCCUPANCY_FILE.exists():
-                with open(OCCUPANCY_FILE, "r", encoding="utf-8") as f:
-                    occ = json.load(f)
-                occ["_id"] = "campus_live"
-                self.db.occupancy.replace_one({"_id": "campus_live"}, occ, upsert=True)
-
-    def _init_local_seed(self):
-        self.local_file = BASE_DIR / "local_cloud_mirror.json"
-        if not self.local_file.exists():
-            seed = self._default_seed_data()
-            with open(self.local_file, "w", encoding="utf-8") as f:
-                json.dump(seed, f, indent=2)
-
-    def _read_local(self) -> dict:
-        with open(self.local_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Purge expired hands automatically
-        now = utc_now()
-        valid_hands = [
-            h
-            for h in data.get("active_hands", [])
-            if parse_iso(h["expires_at"]) > now
-        ]
-        if len(valid_hands) != len(data.get("active_hands", [])):
-            data["active_hands"] = valid_hands
-            self._write_local(data)
-        return data
-
-    def _write_local(self, data: dict):
-        with open(self.local_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+    #--------------- Setup ends --------------#
+        
 
     # ---------------- USERS ----------------
     def get_user(self, roll_number: str) -> dict | None:
@@ -239,6 +216,7 @@ class StudySpotDatabase:
                 results.append(copy_u)
         return results
 
+    #-------------------User Ends----------------#
     # ---------------- FRIENDSHIPS ----------------
     def get_all_friendships_for_user(self, roll_number: str) -> list[dict]:
         roll = roll_number.strip().upper()

@@ -1,14 +1,24 @@
 import sys
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 # Add repo root to sys.path so camera_cloud_capture can be imported directly
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+
+FRONTEND_DIR = "../frontend/dist"
+
+# if str(FRONTEND_DIR) not in sys.path:
+#     exit(1)
+
+    
 from createRandomData import generate_campus_occupancy_data
 from database.db import db_instance, hash_password
 from database.models import (
@@ -33,6 +43,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 
 @app.get("/")
@@ -352,3 +364,17 @@ async def detect_room_occupancy(payload: RoomDetectRequest):
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+
+app.mount(path="/assets",app= StaticFiles(directory=f"{FRONTEND_DIR}/assets"),name="assets")
+
+
+
+@app.get("/{fullpath:path}")
+async def serve_react_app(full_path: str):
+    return FileResponse(os.path.join(FRONTEND_DIR,"index.html"))
+
+
+
+    
