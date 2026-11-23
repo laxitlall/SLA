@@ -11,7 +11,7 @@ uri = os.getenv("MONGO_URI")
 client = MongoClient(uri,server_api=ServerApi("1"))
 
 db = client.sl_db
-user_collection = db["sl_users"]
-occupancy_collection = db["sl_occupancy"]
+users = db["sl_users"]
+occupancy = db["cv_demo_snapshots"]
 
 
