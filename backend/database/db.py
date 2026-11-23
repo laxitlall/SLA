@@ -24,7 +24,7 @@ MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
 DB_NAME = os.getenv("DB_NAME", "sl_db").strip()
 
 BASE_DIR = Path(__file__).resolve().parent
-# OCCUPANCY_FILE = BASE_DIR / "campus_occupancy.json"
+OCCUPANCY_FILE = BASE_DIR / "campus_occupancy.json"
 
 
 def hash_password(password: str) -> str:
@@ -115,10 +115,10 @@ class StudySpotDatabase:
     """
     # -----------Setup and Intialization----------#
     def __init__(self):
-        self.mongo_client = AsyncMongoClient | None = None
+        self.client: AsyncMongoClient | None = None
         self.db = None
-        self.using_cloud = False
-        self._connect()
+        self.using_cloud = True
+        
 
     async def _connect(self) -> None:
         self.client = AsyncMongoClient(
@@ -172,13 +172,20 @@ class StudySpotDatabase:
 
     # ---------------- USERS ----------------
     # TODO tell laxit to change requests
-    async def get_user(self, roll_number: str,include_private: bool = True) -> dict | None:
+    async def get_user(self, roll_number: str,include_private: bool = False) -> dict | None:
         # roll = roll_number.strip().upper()
         projection = SELF_PROJECTION if include_private else OTHER_PROJECTION
         doc = await self.db.users.find_one({"roll_number": roll_number.strip().upper()}, projection)
         if doc and include_private:
             doc.setdefault("role", "student")
         return doc
+
+    async def get_user_for_auth(self, roll_number: str) -> dict | None:
+        """Fetch full user document including password_hash. For auth checks only."""
+        return await self.db.users.find_one(
+            {"roll_number": roll_number.strip().upper()},
+            {"_id": 0},
+        )
     
 
     async def create_user(self, user_doc: dict) -> dict:
@@ -235,6 +242,7 @@ class StudySpotDatabase:
         a, b = user_a.strip().upper(), user_b.strip().upper()
         if a == b:
             return {"status": "SELF"}
+        
         f = await self.db.friendships.find_one(
             {
                 "$or": [
@@ -295,6 +303,16 @@ class StudySpotDatabase:
         )
 
     # ---------------- RAISE HAND (ACTIVE CHECK-INS) ----------------
+
+
+    async def get_users_by_rolls(self, rolls: Iterable[str]) -> dict[str, dict]:
+        unique = list({r.strip().upper() for r in rolls})
+        if not unique:
+            return {}
+        cursor = self.db.users.find({"roll_number": {"$in": unique}}, OTHER_PROJECTION)
+        return {u["roll_number"]: u for u in await cursor.to_list(length=None)}
+
+
     async def _enrich_hands(self, hands: list[dict]) -> list[dict]:
         now = utc_now()
         users = await self.get_users_by_rolls([h["user_roll"] for h in hands])
@@ -325,7 +343,7 @@ class StudySpotDatabase:
             if not wanted:
                 return []
             flt["user_roll"] = {"$in": wanted}
-        cursor = self.db.active_hands.find(flt, {"_id": 0})
+        cursor =  self.db.active_hands.find(flt, {"_id": 0})
         return await self._enrich_hands(await cursor.to_list(length=None))
 
 
@@ -405,7 +423,7 @@ class StudySpotDatabase:
         topic: str,
     ) -> dict:
         roll = creator_roll.strip().upper()
-        user = self.get_user(roll)
+        user = await self.get_user(roll)
         creator_name = user["full_name"] if user else roll
         rsvp_doc = {
             "rsvp_id": f"rsvp-{uuid.uuid4().hex[:8]}",
@@ -419,60 +437,40 @@ class StudySpotDatabase:
             "topic": topic,
             "participants": [{"roll_number": roll, "full_name": creator_name}],
         }
-        if self.using_cloud:
-            self.db.rsvps.insert_one(dict(rsvp_doc))
-        else:
-            data = self._read_local()
-            data["rsvps"].insert(0, rsvp_doc)
-            self._write_local(data)
+        await self.db.rsvps.insert_one(dict(rsvp_doc))
         return rsvp_doc
 
     async def toggle_rsvp_participant(self, rsvp_id: str, user_roll: str) -> dict | None:
         roll = user_roll.strip().upper()
-        user = self.get_user(roll)
+        user = await self.get_user(roll)
         full_name = user["full_name"] if user else roll
 
-        rsvps = self.get_rsvps()
-        target = next((r for r in rsvps if r["rsvp_id"] == rsvp_id), None)
-        if not target:
-            return None
+        joined = await self.db.rsvps.find_one_and_update(
+            {"rsvp_id": rsvp_id, "participants.roll_number": {"$ne": roll}},
+            {"$push": {"participants": {"roll_number": roll, "full_name": full_name}}},
+            projection={"_id": 0},
+            return_document=ReturnDocument.AFTER,
+        )
+        if joined:
+            return joined
 
-        participants = target.get("participants", [])
-        exists = any(p["roll_number"].upper() == roll for p in participants)
-        if exists:
-            participants = [
-                p for p in participants if p["roll_number"].upper() != roll
-            ]
-        else:
-            participants.append({"roll_number": roll, "full_name": full_name})
+        left = await self.db.rsvps.find_one_and_update(
+            {"rsvp_id": rsvp_id, "participants.roll_number": roll},
+            {"$pull": {"participants": {"roll_number": roll}}},
+            projection={"_id": 0},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not left:
+            return None  # nosession
+        if not left.get("participants"):
+            await self.db.rsvps.delete_one({"rsvp_id": rsvp_id, "participants": {"$size": 0}})
+            return {"rsvp_id": rsvp_id, "deleted": True, "participants": []}
+        return left
 
-        if self.using_cloud:
-            if not participants:
-                self.db.rsvps.delete_one({"rsvp_id": rsvp_id})
-                return {"rsvp_id": rsvp_id, "deleted": True, "participants": []}
-            self.db.rsvps.update_one(
-                {"rsvp_id": rsvp_id}, {"$set": {"participants": participants}}
-            )
-        else:
-            data = self._read_local()
-            if not participants:
-                data["rsvps"] = [
-                    r for r in data["rsvps"] if r["rsvp_id"] != rsvp_id
-                ]
-                self._write_local(data)
-                return {"rsvp_id": rsvp_id, "deleted": True, "participants": []}
-            for r in data["rsvps"]:
-                if r["rsvp_id"] == rsvp_id:
-                    r["participants"] = participants
-            self._write_local(data)
-
-        target["participants"] = participants
-        return target
-
-    # ---------------- CCTV CAMPUS OCCUPANCY ----------------
+    # ---------------- CCTV CAMPUS OCCUPANCy ----------------
     async def get_occupancy(self) -> dict:
         if self.using_cloud:
-            doc = self.db.occupancy.find_one({"_id": "campus_live"}, {"_id": 0})
+            doc = await self.db.occupancy.find_one({"_id": "campus_live"}, {"_id": 0})
             if doc:
                 return doc
         if OCCUPANCY_FILE.exists():
@@ -485,12 +483,12 @@ class StudySpotDatabase:
             json.dump(campus_data, f, indent=4)
         if self.using_cloud:
             doc = {**campus_data, "_id": "campus_live"}
-            self.db.occupancy.replace_one({"_id": "campus_live"}, doc, upsert=True)
+            await self.db.occupancy.replace_one({"_id": "campus_live"}, doc, upsert=True)
 
     async def update_room_seats(
         self, zone_name: str, room_id: str, seats: list[dict]
     ) -> dict:
-        campus_data = self.get_occupancy()
+        campus_data = await self.get_occupancy()
         campus_data["timestamp"] = iso_z(utc_now())
         for zone in campus_data.get("zones", []):
             if zone["name"].lower() == zone_name.strip().lower():
@@ -498,7 +496,7 @@ class StudySpotDatabase:
                     if room["room_id"].lower() == room_id.strip().lower():
                         room["seats"] = seats
                         break
-        self.save_occupancy(campus_data)
+        await self.save_occupancy(campus_data)
         return campus_data
 
 

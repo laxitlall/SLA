@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from .camera import Camera
 from .libraries import Library
 from .room import Room, Seat, SeatDetection, Zone
+from .campus import CampusOccupancy
 
 
 class SignupRequest(BaseModel):
@@ -90,4 +91,5 @@ __all__ = [
     "RSVPCreateRequest",
     "RSVPToggleRequest",
     "RoomDetectRequest",
+    "CampusOccupancy"
 ]
