@@ -33,7 +33,6 @@ export default function Room() {
   const [rsvps, setRsvps] = useState([]);
   const [showRsvpSection, setShowRsvpSection] = useState(false);
 
-  // Modal state for scheduling an RSVP or adding a note when raising hand
   const [rsvpModalRoom, setRsvpModalRoom] = useState(null);
   const [rsvpTopic, setRsvpTopic] = useState("Endsem Group Study");
   const [rsvpStartTime, setRsvpStartTime] = useState("Today, 8:00 PM");
@@ -176,13 +175,10 @@ export default function Room() {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         activeHand={activeHand}
-        onConfirmHand={handleConfirmHand}
-        onLowerHand={handleLowerHand}
         pendingRequestsCount={friendsOverview.incoming_requests?.length || 0}
       />
 
       <main className="max-w-[1380px] px-5 py-8 mx-auto lg:px-10 lg:py-10">
-        {/* Top Greeting & Live Indicator */}
         <section className="flex flex-col gap-5 justify-between items-end md:flex-row">
           <div className="w-full md:w-fit">
             <div className="mb-2 text-sm font-medium text-lightgreenfont">
