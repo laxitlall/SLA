@@ -1,24 +1,24 @@
 import sys
 import os
+import logging
 from pathlib import Path
+from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 
-# Add repo root to sys.path so camera_cloud_capture can be imported directly
-ROOT_DIR = Path(__file__).resolve().parent.parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
+from database.db import db_instance, hash_password, strip_internal
 
 
-FRONTEND_DIR = "../frontend/dist"
+from core.middleware import SecurityHeadersMiddleware
+from fastapi.exceptions import RequestValidationError
 
-# if str(FRONTEND_DIR) not in sys.path:
-#     exit(1)
 
-    
 from createRandomData import generate_campus_occupancy_data
 from database.db import db_instance, hash_password
 from database.models import (
@@ -34,7 +34,57 @@ from database.models import (
     SignupRequest,
 )
 
-app = FastAPI(title="StudySpot IITB API")
+
+
+from database.seed import seed_demo_data
+
+# Add repo root to sys.path so camera_cloud_capture can be imported directly
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
+
+
+
+load_dotenv(os.path.join(Path(__file__).resolve().parent.parent,"atlas-credentials.env"))
+load_dotenv(os.path.join(Path(__file__).resolve().parent.parent,".env"))
+
+MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
+DB_NAME = os.getenv("DB_NAME", "sl_db").strip()
+
+SEED_DEMO_DATA = os.getenv("SEED_DEMO_DATA","").strip()
+
+BASE_DIR = Path(__file__).resolve().parent
+OCCUPANCY_FILE = BASE_DIR / "campus_occupancy.json"
+
+
+
+FRONTEND_DIR = os.path.join(Path(__file__).resolve().parent.parent,"frontend","dist")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
+# if str(FRONTEND_DIR) not in sys.path:
+#     exit(1)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) :
+    await db_instance._connect()  # fails fast if MongoDB is unreachable
+    if SEED_DEMO_DATA:
+        await seed_demo_data(db_instance)
+    try:
+        yield
+    finally:
+        await db_instance.close()
+
+    
+app = FastAPI(
+    title="StudySpot IITB API",
+    lifespan=lifespan
+    )
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,6 +93,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    # FastAPI's default 422 body echoes the submitted values back - which would
+    # include passwords. Return only where and why validation failed.
+    errors = [
+        {"loc": list(e.get("loc", ())), "msg": e.get("msg", "Invalid value."), "type": e.get("type", "")}
+        for e in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 
@@ -58,7 +120,7 @@ async def homepage():
 # ---------------- AUTH ----------------
 @app.post("/api/auth/signup")
 async def signup(payload: SignupRequest):
-    existing = db_instance.get_user(payload.roll_number)
+    existing = await db_instance.get_user(payload.roll_number)
     if existing:
         raise HTTPException(
             status_code=400,
@@ -74,20 +136,19 @@ async def signup(payload: SignupRequest):
         "hostel": payload.hostel.strip() or "Hostel 4",
         "bio": "Studying on campus via StudySpot.",
     }
-    created = db_instance.create_user(user_doc)
+    created = await db_instance.create_user(user_doc)
     return {"user": created}
 
 
 @app.post("/api/auth/login")
 async def login(payload: LoginRequest):
-    user = db_instance.get_user(payload.roll_number)
+    user = await db_instance.get_user_for_auth(payload.roll_number)
     if not user or user.get("password_hash") != hash_password(payload.password):
         raise HTTPException(
             status_code=401,
             detail="Invalid roll number or password.",
         )
-    safe_user = {k: v for k, v in user.items() if k != "password_hash"}
-    return {"user": safe_user}
+    return {"user": strip_internal(user)}
 
 
 # ---------------- USERS & PROFILES ----------------
@@ -96,15 +157,15 @@ async def search_users(
     q: str = Query(default=""),
     viewer_roll: str = Query(default=""),
 ):
-    matched = db_instance.search_users(q)
+    matched = await db_instance.search_users(q)
     active_hands = {
-        h["user_roll"].upper(): h for h in db_instance.get_active_hands()
+        h["user_roll"].upper(): h for h in await db_instance.get_active_hands()
     }
     results = []
     for u in matched:
         roll = u["roll_number"].upper()
         rel = (
-            db_instance.get_relationship(viewer_roll, roll)["status"]
+            (await db_instance.get_relationship(viewer_roll, roll))["status"]
             if viewer_roll
             else "NONE"
         )
@@ -126,38 +187,33 @@ async def search_users(
 async def get_user_profile(
     roll_number: str,
     viewer_roll: str = Query(default=""),
-):
-    user = db_instance.get_user(roll_number)
+    ):
+    
+    is_self = bool(viewer_roll) and viewer_roll.strip().upper() == roll_number.strip().upper()
+    user = await db_instance.get_user(roll_number, include_private=is_self)
     if not user:
         raise HTTPException(status_code=404, detail="Student not found.")
 
-    safe_user = {k: v for k, v in user.items() if k != "password_hash"}
-    roll = safe_user["roll_number"].upper()
+    roll = user["roll_number"].upper()
     rel = (
-        db_instance.get_relationship(viewer_roll, roll)["status"]
+        (await db_instance.get_relationship(viewer_roll, roll))["status"]
         if viewer_roll
         else "NONE"
     )
     can_view_activity = rel in ("FRIENDS", "SELF")
-    active_hand = db_instance.get_user_hand(roll) if can_view_activity else None
-
-    all_rsvps = db_instance.get_rsvps()
+    active_hand = await db_instance.get_user_hand(roll) if can_view_activity else None
     user_rsvps = (
-        [
-            r
-            for r in all_rsvps
-            if any(p["roll_number"].upper() == roll for p in r.get("participants", []))
-        ]
+        await db_instance.get_rsvps(participant_roll=roll)
         if can_view_activity
         else []
     )
 
-    friendships = db_instance.get_all_friendships_for_user(roll)
+    friendships = await db_instance.get_all_friendships_for_user(roll)
     friends_count = sum(1 for f in friendships if f["status"] == "ACCEPTED")
 
     return {
         "profile": {
-            **safe_user,
+            **user,
             "relationship": rel,
             "friends_count": friends_count,
             "active_hand": active_hand,
@@ -165,10 +221,9 @@ async def get_user_profile(
         }
     }
 
-
 @app.put("/api/users/{roll_number}")
 async def update_user_profile(roll_number: str, payload: ProfileUpdateRequest):
-    updated = db_instance.update_user(roll_number, payload.model_dump())
+    updated = await db_instance.update_user(roll_number, payload.model_dump())
     if not updated:
         raise HTTPException(status_code=404, detail="Student not found.")
     return {"user": updated}
@@ -178,9 +233,9 @@ async def update_user_profile(roll_number: str, payload: ProfileUpdateRequest):
 @app.get("/api/friends/{roll_number}")
 async def get_friends_overview(roll_number: str):
     roll = roll_number.strip().upper()
-    friendships = db_instance.get_all_friendships_for_user(roll)
+    friendships = await db_instance.get_all_friendships_for_user(roll)
     active_hands_map = {
-        h["user_roll"].upper(): h for h in db_instance.get_active_hands()
+        h["user_roll"].upper(): h for h in await db_instance.get_active_hands()
     }
 
     friends = []
@@ -191,7 +246,7 @@ async def get_friends_overview(roll_number: str):
         s = f["sender_roll"].upper()
         r = f["receiver_roll"].upper()
         other_roll = r if s == roll else s
-        other_user = db_instance.get_user(other_roll)
+        other_user = await db_instance.get_user(other_roll)
         if not other_user:
             continue
         safe_other = {k: v for k, v in other_user.items() if k != "password_hash"}
@@ -231,13 +286,13 @@ async def get_friends_overview(roll_number: str):
 async def send_friend_request(payload: FriendRequestCreate):
     if payload.sender_roll.strip().upper() == payload.receiver_roll.strip().upper():
         raise HTTPException(status_code=400, detail="Cannot add yourself.")
-    res = db_instance.send_friend_request(payload.sender_roll, payload.receiver_roll)
+    res = await db_instance.send_friend_request(payload.sender_roll, payload.receiver_roll)
     return res
 
 
 @app.post("/api/friends/respond")
 async def respond_friend_request(payload: FriendRequestRespond):
-    res = db_instance.respond_friend_request(
+    res = await db_instance.respond_friend_request(
         payload.sender_roll, payload.receiver_roll, payload.action
     )
     return res
@@ -245,19 +300,19 @@ async def respond_friend_request(payload: FriendRequestRespond):
 
 @app.delete("/api/friends/{user_a}/{user_b}")
 async def remove_friend(user_a: str, user_b: str):
-    db_instance.remove_friend(user_a, user_b)
+    await db_instance.remove_friend(user_a, user_b)
     return {"status": "NONE"}
 
 
 # ---------------- RAISE HAND (CHECK-IN WITH AUTO-EXPIRY) ----------------
 @app.get("/api/hands")
 async def list_active_hands():
-    return {"active_hands": db_instance.get_active_hands()}
+    return {"active_hands": await db_instance.get_active_hands()}
 
 
 @app.post("/api/hands/raise")
 async def raise_hand(payload: RaiseHandRequest):
-    hand = db_instance.raise_hand(
+    hand = await db_instance.raise_hand(
         user_roll=payload.user_roll,
         zone_name=payload.zone_name,
         room_id=payload.room_id,
@@ -270,7 +325,7 @@ async def raise_hand(payload: RaiseHandRequest):
 
 @app.post("/api/hands/confirm")
 async def confirm_still_studying(payload: ConfirmHandRequest):
-    hand = db_instance.confirm_hand(
+    hand = await db_instance.confirm_hand(
         user_roll=payload.user_roll,
         extend_minutes=payload.extend_minutes,
     )
@@ -281,19 +336,19 @@ async def confirm_still_studying(payload: ConfirmHandRequest):
 
 @app.delete("/api/hands/{user_roll}")
 async def lower_hand(user_roll: str):
-    db_instance.lower_hand(user_roll)
+    await db_instance.lower_hand(user_roll)
     return {"active_hand": None}
 
 
 # ---------------- RSVPS (POKEMON GO STYLE STUDY SESSIONS) ----------------
 @app.get("/api/rsvps")
 async def list_rsvps(zone_name: str | None = Query(default=None)):
-    return {"rsvps": db_instance.get_rsvps(zone_name)}
+    return {"rsvps": await db_instance.get_rsvps(zone_name)}
 
 
 @app.post("/api/rsvps")
 async def create_rsvp(payload: RSVPCreateRequest):
-    rsvp = db_instance.create_rsvp(
+    rsvp = await db_instance.create_rsvp(
         creator_roll=payload.creator_roll,
         zone_name=payload.zone_name,
         room_id=payload.room_id,
@@ -307,7 +362,7 @@ async def create_rsvp(payload: RSVPCreateRequest):
 
 @app.post("/api/rsvps/{rsvp_id}/toggle")
 async def toggle_rsvp(rsvp_id: str, payload: RSVPToggleRequest):
-    updated = db_instance.toggle_rsvp_participant(rsvp_id, payload.user_roll)
+    updated = await db_instance.toggle_rsvp_participant(rsvp_id, payload.user_roll)
     if not updated:
         raise HTTPException(status_code=404, detail="RSVP session not found.")
     return {"rsvp": updated}
@@ -316,13 +371,13 @@ async def toggle_rsvp(rsvp_id: str, payload: RSVPToggleRequest):
 # ---------------- CCTV CAMPUS OCCUPANCY & CAMERA DETECTION ----------------
 @app.get("/api/occupancy")
 async def get_occupancy():
-    return db_instance.get_occupancy()
+    return await db_instance.get_occupancy()
 
 
 @app.post("/api/occupancy/refresh")
 async def refresh_occupancy():
     data = generate_campus_occupancy_data()
-    db_instance.save_occupancy(data)
+    await db_instance.save_occupancy(data)
     return data
 
 
@@ -350,7 +405,7 @@ async def detect_room_occupancy(payload: RoomDetectRequest):
             camera_source=payload.camera_source,
             seat_prefix=payload.room_id.upper(),
         )
-        updated_campus = db_instance.update_room_seats(
+        updated_campus = await db_instance.update_room_seats(
             zone_name=payload.zone_name,
             room_id=payload.room_id,
             seats=seats,
@@ -371,7 +426,7 @@ app.mount(path="/assets",app= StaticFiles(directory=f"{FRONTEND_DIR}/assets"),na
 
 
 
-@app.get("/{fullpath:path}")
+@app.get("/{full_path:path}")
 async def serve_react_app(full_path: str):
     return FileResponse(os.path.join(FRONTEND_DIR,"index.html"))
 
