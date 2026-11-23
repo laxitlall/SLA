@@ -8,14 +8,3 @@
 
 *.pyc
 
-mongoConfig.py
-
-# Local development dependencies
-.venv/
-venv/
-node_modules/
-*.env
-.env.*
-__pycache__/
-*.pyc
-package-lock.backup.json
