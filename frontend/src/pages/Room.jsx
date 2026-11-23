@@ -1,3 +1,4 @@
+import CvDemoPanel from "../components/CvDemoPanel";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import Navbar from "../components/Navbar";
@@ -179,6 +180,10 @@ export default function Room() {
       />
 
       <main className="max-w-[1380px] px-5 py-8 mx-auto lg:px-10 lg:py-10">
+        {/* Recorded Roboflow inference, separate from the live seat grid and RSVP */}
+        <CvDemoPanel compact />
+
+        {/* Top Greeting & Live Indicator */}
         <section className="flex flex-col gap-5 justify-between items-end md:flex-row">
           <div className="w-full md:w-fit">
             <div className="mb-2 text-sm font-medium text-lightgreenfont">
