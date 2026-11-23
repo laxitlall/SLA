@@ -115,7 +115,7 @@ class StudySpotDatabase:
     """
     # -----------Setup and Intialization----------#
     def __init__(self):
-        self.mongo_client = AsyncMongoClient | None
+        self.mongo_client = AsyncMongoClient | None = None
         self.db = None
         self.using_cloud = False
         self._connect()
@@ -331,11 +331,8 @@ class StudySpotDatabase:
 
 
     async def get_user_hand(self, user_roll: str) -> dict | None:
-        roll = user_roll.strip().upper()
-        for h in self.get_active_hands():
-            if h["user_roll"].upper() == roll:
-                return h
-        return None
+        hands = await self.get_active_hands([user_roll])
+        return hands[0] if hands else None
 
     async def raise_hand(
         self,
@@ -349,75 +346,53 @@ class StudySpotDatabase:
         roll = user_roll.strip().upper()
         now = utc_now()
         expires = now + timedelta(minutes=duration_minutes)
-        hand_doc = {
-            "user_roll": roll,
-            "zone_name": zone_name,
-            "room_id": room_id,
-            "room_name": room_name,
-            "note": note,
-            "raised_at": iso_z(now),
-            "expires_at": iso_z(expires),
-        }
-        if self.using_cloud:
-            mongo_doc = {**hand_doc, "expires_at_dt": expires}
-            self.db.active_hands.replace_one(
-                {"user_roll": roll}, mongo_doc, upsert=True
-            )
-        else:
-            data = self._read_local()
-            data["active_hands"] = [
-                h for h in data["active_hands"] if h["user_roll"].upper() != roll
-            ]
-            data["active_hands"].append(hand_doc)
-            self._write_local(data)
-        return self.get_user_hand(roll)
+        await self.db.active_hands.replace_one(
+            {"user_roll": roll},
+            {
+                "user_roll": roll,
+                "zone_name": zone_name,
+                "room_id": room_id,
+                "room_name": room_name,
+                "note": note,
+                "raised_at": iso_z(now),
+                "expires_at": iso_z(expires),
+                "expires_at_dt": expires,
+            },
+            upsert=True,
+        )
+        return await self.get_user_hand(roll)
+    
 
     async def confirm_hand(self, user_roll: str, extend_minutes: int = 60) -> dict | None:
         roll = user_roll.strip().upper()
-        current = self.get_user_hand(roll)
-        if not current:
-            return None
         now = utc_now()
         new_expires = now + timedelta(minutes=extend_minutes)
-        if self.using_cloud:
-            self.db.active_hands.update_one(
-                {"user_roll": roll},
-                {
-                    "$set": {
-                        "expires_at": iso_z(new_expires),
-                        "expires_at_dt": new_expires,
-                    }
-                },
-            )
-        else:
-            data = self._read_local()
-            for h in data["active_hands"]:
-                if h["user_roll"].upper() == roll:
-                    h["expires_at"] = iso_z(new_expires)
-            self._write_local(data)
-        return self.get_user_hand(roll)
+        result = await self.db.active_hands.update_one(
+            {"user_roll": roll, "expires_at_dt": {"$gt": now}},
+            {"$set": {"expires_at": iso_z(new_expires), "expires_at_dt": new_expires}},
+        )
+        if result.matched_count == 0:
+            return None
+        return await self.get_user_hand(roll)
 
     async def lower_hand(self, user_roll: str):
-        roll = user_roll.strip().upper()
-        if self.using_cloud:
-            self.db.active_hands.delete_one({"user_roll": roll})
-        else:
-            data = self._read_local()
-            data["active_hands"] = [
-                h for h in data["active_hands"] if h["user_roll"].upper() != roll
-            ]
-            self._write_local(data)
+        # roll = user_roll.strip().upper()
+        await self.db.active_hands.delete_one({"user_roll": user_roll.strip().upper()})
 
     # ---------------- RSVPS (POKEMON GO STYLE LOBBIES) ----------------
-    async def get_rsvps(self, zone_name: str | None = None) -> list[dict]:
-        if self.using_cloud:
-            query = {"zone_name": zone_name} if zone_name else {}
-            return list(self.db.rsvps.find(query, {"_id": 0}))
-        data = self._read_local()
-        rsvps = data.get("rsvps", [])
+    async def get_rsvps(
+        self, zone_name: str | None = None, 
+        participant_roll: str | None = None, 
+        limit: int = 200
+    ) -> list[dict]:
+        flt: dict[str, Any] = {}
         if zone_name:
-            return [r for r in rsvps if r["zone_name"] == zone_name]
-        return rsvps
+            flt["zone_name"] = zone_name
+        if participant_roll:
+            flt["participants.roll_number"] = participant_roll.strip().upper()
+        cursor = self.db.rsvps.find(flt, {"_id": 0}).sort("_id", -1).limit(limit)  # newest first
+        return await cursor.to_list(length=limit)
+
 
     async def create_rsvp(
         self,
