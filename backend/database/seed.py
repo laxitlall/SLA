@@ -7,6 +7,7 @@ share the password from DEMO_USER_PASSWORD - there is no built-in default passwo
 import json
 import logging
 from pathlib import Path
+import hashlib
 
 from fastapi.concurrency import run_in_threadpool
 
@@ -18,6 +19,10 @@ from database.db import OCCUPANCY_DOC_ID
 logger = logging.getLogger("studyspot.seed")
 
 OCCUPANCY_FILE = Path(__file__).resolve().parent / "campus_occupancy.json"
+
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 DEMO_USERS = [
     {
@@ -59,10 +64,12 @@ async def seed_demo_data(database) -> None:
         password_hash = await run_in_threadpool(hash_password, settings.demo_user_password)
         for user in DEMO_USERS:
             await database.db.users.update_one(
-                {"roll_number": user["roll_number"]},
+                {"roll_number": user["roll_number"].strip().upper()},
                 {
                     "$setOnInsert": {
                         **user,
+                        "roll_number": user["roll_number"].strip().upper(),
+                        "email": user["email"].strip().lower(),
                         "password_hash": password_hash,
                         "role": "student",
                         "token_version": 0,
