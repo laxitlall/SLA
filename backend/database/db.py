@@ -46,7 +46,7 @@ def parse_iso(iso_str: str) -> datetime:
 
 OCCUPANCY_DOC_ID = "campus_live"
 
-# Fields that exist only for authentication/security and are never returned to clients.
+# Fields that exist only for authentication/security
 INTERNAL_USER_FIELDS = (
     "password_hash",
     "token_version",
@@ -63,7 +63,6 @@ def _exclude(*fields: str) -> dict[str, int]:
 
 
 SELF_PROJECTION = _exclude(*INTERNAL_USER_FIELDS)
-# What other students may see: no e-mail address, no role.
 OTHER_PROJECTION = _exclude(*INTERNAL_USER_FIELDS, "email", "role")
 
 
@@ -143,7 +142,7 @@ class StudySpotDatabase:
         try:
             await self.client.admin.command("ping")
             return True
-        except Exception:  # noqa: BLE001 - any failure (incl. not connected) means "down"
+        except Exception:  
             return False
 
 
@@ -208,7 +207,7 @@ class StudySpotDatabase:
         q = query.strip()
         flt: dict[str, Any] = {}
         if q:
-            pattern = re.escape(q)  # user input is matched literally, never as a regex
+            pattern = re.escape(q)  
             flt = {
                 "$or": [
                     {field: {"$regex": pattern, "$options": "i"}}
@@ -257,7 +256,7 @@ class StudySpotDatabase:
         rel = (await self.get_relationship(s, r))["status"]
         if rel in ("FRIENDS", "OUTGOING_PENDING"):
             return {"status": rel}
-        if rel == "INCOMING_PENDING":  # they already asked us: sending one back accepts it
+        if rel == "INCOMING_PENDING": 
             return await self.respond_friend_request(r, s, "ACCEPT") or {"status": "NONE"}
         try:
             await self.db.friendships.insert_one(
@@ -268,7 +267,7 @@ class StudySpotDatabase:
                     "created_at": iso_z(utc_now()),
                 }
             )
-        except DuplicateKeyError:  # double-click / concurrent request
+        except DuplicateKeyError:  
             pass
         return {"status": "OUTGOING_PENDING"}
 
@@ -277,11 +276,16 @@ class StudySpotDatabase:
         pending = {"sender_roll": s, "receiver_roll": r, "status": "PENDING"}
         if action.strip().upper() == "ACCEPT":
             result = await self.db.friendships.update_one(
+
+
+
                 pending, {"$set": {"status": "ACCEPTED", "accepted_at": iso_z(utc_now())}}
             )
             return {"status": "FRIENDS"} if result.matched_count else None
         result = await self.db.friendships.delete_one(pending)
         return {"status": "NONE"} if result.deleted_count else None
+
+    
 
     async def remove_friend(self, user_a: str, user_b: str) -> None:
         a, b = user_a.strip().upper(), user_b.strip().upper()
@@ -303,6 +307,7 @@ class StudySpotDatabase:
             user = users.get(h["user_roll"].upper())
             expires = h.pop("expires_at_dt", None) or parse_iso(h["expires_at"])
             if expires.tzinfo is None:
+
                 expires = expires.replace(tzinfo=timezone.utc)
             remaining = max(0, int((expires - now).total_seconds() // 60))
             enriched.append(
@@ -311,6 +316,7 @@ class StudySpotDatabase:
                     "full_name": user["full_name"] if user else h["user_roll"],
                     "branch": user.get("branch", "") if user else "",
                     "hostel": user.get("hostel", "") if user else "",
+
                     "remaining_minutes": remaining,
                     "needs_confirmation": remaining <= 15,
                 }
@@ -321,6 +327,7 @@ class StudySpotDatabase:
         """Active hands, optionally restricted to the given roll numbers."""
         flt: dict[str, Any] = {"expires_at_dt": {"$gt": utc_now()}}
         if rolls is not None:
+
             wanted = list({r.strip().upper() for r in rolls})
             if not wanted:
                 return []
@@ -348,8 +355,10 @@ class StudySpotDatabase:
     ) -> dict:
         roll = user_roll.strip().upper()
         now = utc_now()
+
         expires = now + timedelta(minutes=duration_minutes)
         hand_doc = {
+
             "user_roll": roll,
             "zone_name": zone_name,
             "room_id": room_id,
@@ -369,6 +378,8 @@ class StudySpotDatabase:
                 h for h in data["active_hands"] if h["user_roll"].upper() != roll
             ]
             data["active_hands"].append(hand_doc)
+
+
             self._write_local(data)
         return self.get_user_hand(roll)
 
@@ -377,8 +388,11 @@ class StudySpotDatabase:
         current = self.get_user_hand(roll)
         if not current:
             return None
+
+        
         now = utc_now()
         new_expires = now + timedelta(minutes=extend_minutes)
+
         if self.using_cloud:
             self.db.active_hands.update_one(
                 {"user_roll": roll},
@@ -443,6 +457,7 @@ class StudySpotDatabase:
             "end_time": end_time,
             "topic": topic,
             "participants": [{"roll_number": roll, "full_name": creator_name}],
+
         }
         if self.using_cloud:
             self.db.rsvps.insert_one(dict(rsvp_doc))
@@ -467,9 +482,11 @@ class StudySpotDatabase:
         if exists:
             participants = [
                 p for p in participants if p["roll_number"].upper() != roll
+
             ]
         else:
             participants.append({"roll_number": roll, "full_name": full_name})
+
 
         if self.using_cloud:
             if not participants:
@@ -487,6 +504,7 @@ class StudySpotDatabase:
                 self._write_local(data)
                 return {"rsvp_id": rsvp_id, "deleted": True, "participants": []}
             for r in data["rsvps"]:
+
                 if r["rsvp_id"] == rsvp_id:
                     r["participants"] = participants
             self._write_local(data)
@@ -502,6 +520,7 @@ class StudySpotDatabase:
                 return doc
         if OCCUPANCY_FILE.exists():
             with open(OCCUPANCY_FILE, "r", encoding="utf-8") as f:
+
                 return json.load(f)
         return {"timestamp": iso_z(utc_now()), "zones": []}
 
@@ -510,6 +529,7 @@ class StudySpotDatabase:
             json.dump(campus_data, f, indent=4)
         if self.using_cloud:
             doc = {**campus_data, "_id": "campus_live"}
+
             self.db.occupancy.replace_one({"_id": "campus_live"}, doc, upsert=True)
 
     async def update_room_seats(
@@ -522,6 +542,8 @@ class StudySpotDatabase:
                 for room in zone.get("rooms", []):
                     if room["room_id"].lower() == room_id.strip().lower():
                         room["seats"] = seats
+
+                        
                         break
         self.save_occupancy(campus_data)
         return campus_data

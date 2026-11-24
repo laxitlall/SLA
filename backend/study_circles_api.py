@@ -1,11 +1,4 @@
-"""Study Circles: isolated MongoDB-backed demo room reservations.
 
-Prototype limitations:
-- Identity is asserted by the calling frontend; add authenticated sessions/RBAC
-  before making this public.
-- One demonstrator room (H15 Room 2), one-hour whole-hour slots.
-- This does NOT reserve a real IIT Bombay room or change camera seat data.
-"""
 from __future__ import annotations
 
 import os
@@ -22,7 +15,7 @@ from pydantic import BaseModel, Field
 try:
     from pymongo import MongoClient
     from pymongo.errors import DuplicateKeyError, PyMongoError
-except ImportError:  # prevents the rest of the application crashing on import
+except ImportError:  
     MongoClient = None
 
     class DuplicateKeyError(Exception):
@@ -38,7 +31,7 @@ for env_path in (ROOT / ".env", ROOT / "backend" / ".env", ROOT / "backend" / "a
     load_dotenv(env_path, override=False)
 
 ROOM = {"room_id": "h15-room-2", "zone_name": "Hostel 15", "room_name": "Study Room 2", "group_capacity": 6}
-START_HOURS = range(9, 22)  # 09:00–10:00 through 21:00–22:00 local time
+START_HOURS = range(9, 22)  
 IST = timezone(timedelta(hours=5, minutes=30))
 _client = None
 _collection = None
@@ -54,19 +47,24 @@ def get_collection():
         if _collection is not None:
             return _collection
         if MongoClient is None:
+
+
             raise HTTPException(503, "Study Circles requires pymongo. Install backend requirements.")
         uri = (os.environ.get("STUDY_CIRCLES_MONGODB_URI")
                or os.environ.get("MONGODB_URI")
                or os.environ.get("MONGO_URI") or "").strip()
         if not uri:
             raise HTTPException(503, "MongoDB URI missing. Set MONGODB_URI in the project .env.")
+
+        
         try:
             client = MongoClient(uri, serverSelectionTimeoutMS=4000)
             client.admin.command("ping")
             db_name = (os.environ.get("STUDY_CIRCLES_DB_NAME") or os.environ.get("MONGODB_DB_NAME") or os.environ.get("DB_NAME") or "studyspot").strip()
             col = client[db_name]["study_circle_bookings_v1"]
-            # _id is a deterministic room/date/hour key; MongoDB already
-            # enforces a unique index on _id, even for concurrent requests.
+
+
+            
             col.create_index("booking_id", unique=True)
             col.create_index("organizer_roll")
             col.create_index("invitees.roll_number")
@@ -165,9 +163,12 @@ def create_booking(payload: CreateBooking):
     topic = payload.topic.strip()
     if len(topic) < 3:
         raise HTTPException(422, "Enter a study topic of at least three characters.")
+    
     invited = [normalize_roll(x) for x in payload.invitees]
+
     if len(set(invited)) != len(invited) or roll in invited:
         raise HTTPException(422, "Invite each friend once; do not invite yourself.")
+    
     if len(invited) + 1 > ROOM["group_capacity"]:
         raise HTTPException(422, "Group exceeds this demo room's booking limit.")
 
@@ -182,13 +183,19 @@ def create_booking(payload: CreateBooking):
         "invitees": [{"roll_number": r, "status": "PENDING"} for r in invited],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+
     try:
         get_collection().insert_one(doc)  # UNIQUE _id: exactly one client wins
         return {"booking": public_record(doc)}
+    
     except DuplicateKeyError as exc:
         raise HTTPException(409, "That room and time slot has already been booked. Pick another.") from exc
+    
     except PyMongoError as exc:
         raise HTTPException(503, "Unable to save booking to MongoDB.") from exc
+
+
+
 
 
 @router.post("/bookings/{booking_id}/respond")
@@ -234,7 +241,9 @@ def send_reminder(booking_id: str, payload: SendReminder):
             "message": message,
             "sent_at": datetime.now(timezone.utc).isoformat(),
         }
-        # Protect against excess messages, including simultaneous sends.
+
+
+        
         result = col.update_one({**query, "reminders.9": {"$exists": False}},
                                 {"$push": {"reminders": reminder}})
         if not result.modified_count:

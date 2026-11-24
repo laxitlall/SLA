@@ -10,7 +10,7 @@ def generate_campus_occupancy_data():
         "zones": [],
     }
 
-    # 1. Generate 21 Hostels with 2-4 rooms each
+    # 1. Generate h
     for h_id in range(1, 22):
         hostel_name = f"Hostel {h_id}"
         num_rooms = random.randint(2, 4)
@@ -32,7 +32,7 @@ def generate_campus_occupancy_data():
             {"zone_type": "hostel", "name": hostel_name, "rooms": rooms}
         )
 
-    # 2. Generate Central Library with 10 rooms
+    
     lib_rooms = []
     for r_id in range(1, 11):
         room_name = f"Reading Hall {r_id}"
@@ -58,12 +58,12 @@ def generate_seats(num_seats, prefix):
     for s_idx in range(1, num_seats + 1):
         seat_id = f"{prefix}-S{s_idx:02d}"
 
-        # Simulate realistic probabilities for detections
-        has_person = random.random() < 0.45  # 45% chance a person is sitting there
+        # S
+        has_person = random.random() < 0.45 
         has_laptop = random.random() < (
             0.70 if has_person else 0.20
-        )  # Laptops likely if person present, or left behind
-        has_bag = random.random() < 0.15  # 15% chance a bag is left on the chair
+        )  #
+        has_bag = random.random() < 0.15  
 
         # Apply your decision hierarchy
         if has_person:

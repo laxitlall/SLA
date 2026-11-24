@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-# Add repo root to sys.path so camera_cloud_capture can be imported directly
+# Add root
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
@@ -108,7 +108,11 @@ async def search_users(
             if viewer_roll
             else "NONE"
         )
-        # Only expose active study room if they are friends or self
+        
+
+
+
+
         active_hand = (
             active_hands.get(roll) if rel in ("FRIENDS", "SELF") else None
         )
