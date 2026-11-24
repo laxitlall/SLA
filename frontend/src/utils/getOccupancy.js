@@ -1,5 +1,5 @@
 // src/utils/getOccupancy.js
-import campusData from "../../../backend/database/campus_occupancy.json";
+import campusData from "../data/demoCampus.json";
 
 export function getCampusOccupancySummary(sourceData = null) {
   const data = sourceData && sourceData.zones ? sourceData : campusData;
@@ -58,3 +58,4 @@ export function getCampusOccupancySummary(sourceData = null) {
 
   return { summary, finalAvailableSeats, timestamp: data.timestamp };
 }
+

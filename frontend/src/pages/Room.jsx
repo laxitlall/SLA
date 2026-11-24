@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import Navbar from "../components/Navbar";
 import ZoneCard from "../components/ZoneCard";
+import H15CvZone from "../components/H15CvZone";
 import {
   apiConfirmHand,
   apiCreateRSVP,
@@ -190,13 +191,13 @@ export default function Room() {
               Find your place to focus
             </h1>
             <div className="mt-3 text-gray-500">
-              Live CCTV seat availability across IIT Bombay.
+              Demo campus spaces • H15 Study Room 1 uses recorded CV predictions.
             </div>
           </div>
           <div className="flex w-full items-center h-fit gap-2 px-4 py-3 rounded-xl border border-[#e3e8e5] bg-white text-sm font-medium md:w-fit">
             <span className="w-2 h-2 rounded-full bg-green-600 inline-block" />
-            <span className="text-[#43554e]">Live Now</span>
-            <span className="text-[#929a96]">Updated just now</span>
+            <span className="text-[#43554e]">Demo mode</span>
+            <span className="text-[#929a96]">Recorded CV replay</span>
           </div>
         </section>
         
@@ -379,6 +380,8 @@ export default function Room() {
           </section>
         )}
 
+        {/* Study Circles - real MongoDB-backed group room booking */}
+
         {/* Spaces Near You & Filters */}
         <section className="mt-10">
           <div className="flex flex-col justify-between md:flex-row">
@@ -435,7 +438,7 @@ export default function Room() {
                 (f) => f.active_hand?.zone_name === zone.name
               );
               return (
-                <ZoneCard
+                <H15CvZone
                   key={zone.name}
                   zone={zone}
                   user={user}

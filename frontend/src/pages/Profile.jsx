@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import Navbar, { getInitials } from "../components/Navbar";
+import StudyCircleProfileInbox from "../components/StudyCircleProfileInbox";
 import {
   apiConfirmHand,
   apiGetActiveHands,
@@ -390,8 +391,11 @@ export default function Profile() {
             {/* Planned RSVPs Card */}
             <section className="bg-white rounded-2xl p-6 border border-[#e3e8e5] shadow-sm">
               <h2 className="text-lg font-bold text-greenfont">
-                📅 Upcoming Study RSVPs
+                📅 Upcoming Study RSVPs & Circles
               </h2>
+              {isOwnProfile && currentUser && (
+                <StudyCircleProfileInbox userRoll={currentUser.roll_number} />
+              )}
               {profile.rsvps && profile.rsvps.length > 0 ? (
                 <div className="mt-3 space-y-3">
                   {profile.rsvps.map((rsvp) => {
@@ -441,7 +445,7 @@ export default function Profile() {
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-gray-500">
-                  No upcoming study RSVPs scheduled.
+                  No separate RSVP sessions scheduled.
                 </p>
               )}
             </section>

@@ -220,6 +220,8 @@ export default function ZoneCard({
                             ? "bg-green-100 text-green-800 border-green-200"
                             : seat.computed_state === "SPOT_HELD"
                             ? "bg-amber-100 text-amber-800 border-amber-200"
+                            : seat.computed_state === "UNKNOWN"
+                            ? "bg-gray-100 text-gray-700 border-gray-300"
                             : "bg-red-100 text-red-800 border-red-200";
                         return (
                           <span
@@ -256,11 +258,13 @@ export default function ZoneCard({
                   Occupied
                 </span>
               </div>
-              <Link to="/cv-monitor"
-                className="px-4 py-1.5 rounded-lg bg-greenfont text-white font-bold text-xs"
-              >
-                Show Detection
-              </Link>
+              {zone.name === "Hostel 15" && import.meta.env.DEV && (
+                <Link to="/cv-monitor"
+                  className="px-4 py-1.5 rounded-lg bg-greenfont text-white font-bold text-xs"
+                >
+                  🔒 Show detections (Admin)
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}

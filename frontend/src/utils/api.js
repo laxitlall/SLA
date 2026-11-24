@@ -586,3 +586,55 @@ export async function apiFetchOccupancy() {
     return null;
   }
 }
+
+// ===== Study Circles: MongoDB-only room bookings (no localStorage fallback) =====
+const STUDY_CIRCLES_BASE = import.meta.env.VITE_STUDY_CIRCLES_API_URL || "http://localhost:8002";
+
+async function circlesFetch(path, options = {}) {
+  let response;
+  try {
+    response = await fetch(`${STUDY_CIRCLES_BASE}/api/study-circles${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch {
+    throw new Error("Study Circles booking server is unavailable. Start port 8002 and check MongoDB.");
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof data.detail === "string" ? data.detail : `Booking request failed (${response.status}).`);
+  }
+  return data;
+}
+
+export function apiStudyCircleSlots(date) {
+  return circlesFetch(`/slots?date=${encodeURIComponent(date)}`);
+}
+export function apiStudyCircleBookings(userRoll) {
+  return circlesFetch(`/bookings?user_roll=${encodeURIComponent(userRoll)}`);
+}
+export function apiCreateStudyCircle({ organizer_roll, date, slot, topic, invitees }) {
+  return circlesFetch("/bookings", {
+    method: "POST",
+    body: JSON.stringify({ organizer_roll, date, slot, topic, invitees }),
+  });
+}
+export function apiRespondStudyCircle(bookingId, userRoll, decision) {
+  return circlesFetch(`/bookings/${encodeURIComponent(bookingId)}/respond`, {
+    method: "POST",
+    body: JSON.stringify({ user_roll: userRoll, decision }),
+  });
+}
+export function apiCancelStudyCircle(bookingId, userRoll) {
+  return circlesFetch(`/bookings/${encodeURIComponent(bookingId)}?user_roll=${encodeURIComponent(userRoll)}`, {
+    method: "DELETE",
+  });
+}
+
+// Study Circles in-app reminder (MongoDB-only; never falls back to localStorage).
+export function apiSendStudyCircleReminder(bookingId, senderRoll, message) {
+  return circlesFetch(`/bookings/${encodeURIComponent(bookingId)}/remind`, {
+    method: "POST",
+    body: JSON.stringify({ sender_roll: senderRoll, message }),
+  });
+}

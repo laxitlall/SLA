@@ -5,6 +5,7 @@ import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Room from "./pages/Room";
+import StudyCirclesPage from "./pages/StudyCirclesPage";
 import CvMonitoring from "./pages/CvMonitoring";
 import Friends from "./pages/Friends";
 import Profile from "./pages/Profile";
@@ -19,6 +20,7 @@ function App() {
           <Route path="/signup" element={<Signup />} />
         </Route>
         <Route path="/room" element={<Room />} />
+        <Route path="/study-circles" element={<StudyCirclesPage />} />
           <Route path="/cv-monitor" element={<CvMonitoring />} />
         <Route path="/personal-room" element={<Room />} />
         <Route path="/friends" element={<Friends />} />

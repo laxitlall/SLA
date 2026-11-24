@@ -39,6 +39,16 @@ export default function Navbar({
                 Spaces
               </Link>
               <Link
+                to="/study-circles"
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  location.pathname === "/study-circles"
+                    ? "bg-white text-greenfont shadow-sm"
+                    : "text-[#63706b] hover:text-greenfont"
+                }`}
+              >
+                Study Circles
+              </Link>
+              <Link
                 to="/friends"
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
                   location.pathname === "/friends"

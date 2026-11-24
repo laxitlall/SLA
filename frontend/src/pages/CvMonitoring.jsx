@@ -1,5 +1,9 @@
 import { Link } from "react-router";
 import CvDemoPanel from "../components/CvDemoPanel";
+import CvAccessGate from "../components/CvAccessGate";
+import CvVideoUploader from "../components/CvVideoUploader";
+import CvDatabaseFeed from "../components/CvDatabaseFeed";
+import CvSeatMapPreview from "../components/CvSeatMapPreview";
 
 export default function CvMonitoring() {
   return (
@@ -16,7 +20,9 @@ export default function CvMonitoring() {
         </div>
       </header>
       <main className="mx-auto max-w-[1380px] px-5 py-7 lg:px-10">
-        <CvDemoPanel />
+        <CvAccessGate>
+        <CvVideoUploader />
+        </CvAccessGate>
       </main>
     </div>
   );

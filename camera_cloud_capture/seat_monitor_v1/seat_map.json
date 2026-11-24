@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "room_id": "demo-study-hall",
+  "reference_image": "room.jpeg",
+  "reference_size": {"width": 1600, "height": 734},
+  "note": "Provisional visually placed chair anchors from the earlier room.jpeg. Verify these points and the camera viewpoint before relying on this map.",
+  "seats": [
+    {"seat_id": "DEMO-R1-S01", "label": "S01", "anchor": [0.092, 0.441]},
+    {"seat_id": "DEMO-R1-S02", "label": "S02", "anchor": [0.296, 0.247]},
+    {"seat_id": "DEMO-R1-S03", "label": "S03", "anchor": [0.394, 0.173]},
+    {"seat_id": "DEMO-R1-S04", "label": "S04", "anchor": [0.784, 0.352]},
+    {"seat_id": "DEMO-R1-S05", "label": "S05", "anchor": [0.666, 0.472]},
+    {"seat_id": "DEMO-R1-S06", "label": "S06", "anchor": [0.533, 0.789]}
+  ]
+}
